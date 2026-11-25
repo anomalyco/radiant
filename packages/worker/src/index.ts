@@ -1,7 +1,7 @@
 import { Cause, Effect } from "effect"
 import { listAllActiveItemsForCron, syncItemInternal } from "@radiant/core"
 import { handleAppRoutes } from "./api"
-import { buildAppLayer, jsonResponse, type Env, type SyncQueueMessage } from "./env"
+import { buildAppLayer, buildRouteContext, jsonResponse, type Env, type SyncQueueMessage } from "./env"
 import { handleMcpRequest } from "./mcp"
 import { handleOAuthRoutes } from "./oauth-routes"
 
@@ -32,15 +32,16 @@ const errorToResponse = (err: unknown): Response => {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url)
+    const route = buildRouteContext(url, env.BASE_PATH)
     const layer = buildAppLayer(env)
 
     const program = Effect.gen(function* () {
-      if (url.pathname === "/mcp") {
-        return yield* handleMcpRequest(request, url)
+      if (route.path === "/mcp") {
+        return yield* handleMcpRequest(request, route)
       }
-      const oauthRes = yield* handleOAuthRoutes(request, url)
+      const oauthRes = yield* handleOAuthRoutes(request, route)
       if (oauthRes) return oauthRes
-      return yield* handleAppRoutes(request, url, env)
+      return yield* handleAppRoutes(request, route, env)
     })
 
     const exit = await Effect.runPromiseExit(Effect.provide(program, layer))

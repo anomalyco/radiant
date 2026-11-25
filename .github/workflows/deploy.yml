@@ -50,7 +50,7 @@ jobs:
     timeout-minutes: 15
     environment:
       name: ${{ github.ref_name == 'production' && 'production' || 'dev' }}
-      url: ${{ github.ref_name == 'production' && 'https://radiant-production.anomalyco.workers.dev' || 'https://radiant-dev.anomalyco-dev.workers.dev' }}
+      url: ${{ github.ref_name == 'production' && 'https://anoma.ly/labs/radiant' || 'https://dev.anoma.ly/labs/radiant' }}
     permissions:
       contents: read
       id-token: write
@@ -114,12 +114,13 @@ jobs:
 
   verify:
     needs: deploy
-    if: github.ref == 'refs/heads/dev'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    env:
+      BASE: ${{ github.ref_name == 'production' && 'https://anoma.ly/labs/radiant' || 'https://dev.anoma.ly/labs/radiant' }}
     steps:
-      - name: Verify live dev health
+      - name: Verify live health
         run: |
-          status=$(curl --silent --max-time 20 --output /dev/null --write-out '%{http_code}' "https://radiant-dev.anomalyco-dev.workers.dev/health")
-          echo "/health -> $status"
+          status=$(curl --silent --max-time 20 --output /dev/null --write-out '%{http_code}' "$BASE/health")
+          echo "$BASE/health -> $status"
           test "$status" = 200

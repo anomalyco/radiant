@@ -59,7 +59,7 @@ import {
   type TransactionQueryInput,
 } from "@radiant/core"
 import type { TxPatch, WorkspaceRole } from "@radiant/database/schema"
-import { htmlResponse, jsonResponse, type AppServices, type Env } from "./env"
+import { htmlResponse, jsonResponse, type AppServices, type Env, type RouteContext } from "./env"
 import { resolveBrowserActor } from "./oauth-routes"
 import {
   renderConnectHandoffPage,
@@ -90,13 +90,12 @@ const readJsonBody = (request: Request): Effect.Effect<Record<string, unknown>, 
 
 export const handleAppRoutes = (
   request: Request,
-  url: URL,
+  route: RouteContext,
   env: Env,
 ): Effect.Effect<Response, unknown, AppServices> =>
   Effect.gen(function* () {
-    const path = url.pathname
+    const { url, path, basePath, baseUrl } = route
     const method = request.method
-    const origin = url.origin
 
     // Health check (does not touch DB)
     if (method === "GET" && path === "/health") {
@@ -128,28 +127,28 @@ export const handleAppRoutes = (
 
     if (method === "GET" && path === "/") {
       const actor = yield* resolveBrowserActor(request)
-      if (!actor) return htmlResponse(renderLandingPage(origin))
+      if (!actor) return htmlResponse(renderLandingPage(baseUrl, basePath))
       const workspaces = yield* listWorkspaces(actor)
-      if (workspaces.length === 0) return htmlResponse(renderEmptyWorkspacesPage(actor.email))
-      return Response.redirect(`${origin}/w/${workspaces[0]!.slug}`, 302)
+      if (workspaces.length === 0) return htmlResponse(renderEmptyWorkspacesPage(actor.email, basePath))
+      return Response.redirect(`${baseUrl}/w/${workspaces[0]!.slug}`, 302)
     }
 
     if (method === "POST" && path === "/ui/workspaces") {
       const actor = yield* resolveBrowserActor(request)
-      if (!actor) return Response.redirect(`${origin}/auth/login`, 302)
+      if (!actor) return Response.redirect(`${baseUrl}/auth/login`, 302)
       const form = yield* Effect.promise(async () => new URLSearchParams(await request.text()))
       const created = yield* createWorkspace(actor, {
         name: form.get("name") ?? "Personal",
         currency: form.get("currency") ?? "USD",
       })
-      return Response.redirect(`${origin}/w/${created.slug}`, 302)
+      return Response.redirect(`${baseUrl}/w/${created.slug}`, 302)
     }
 
     if (method === "GET" && path.startsWith("/w/")) {
       const slug = decodeURIComponent(path.slice(3).split("/")[0] ?? "")
       const actor = yield* resolveBrowserActor(request)
       if (!actor) {
-        return Response.redirect(`${origin}/auth/login?return_to=${encodeURIComponent(path)}`, 302)
+        return Response.redirect(`${baseUrl}/auth/login?return_to=${encodeURIComponent(url.pathname)}`, 302)
       }
       const workspaces = yield* listWorkspaces(actor)
       const ws = yield* assertWorkspaceAccess(actor, slug, "viewer")
@@ -165,7 +164,8 @@ export const handleAppRoutes = (
           : []
       return htmlResponse(
         renderWorkspaceDashboard({
-          origin,
+          baseUrl,
+          basePath,
           email: actor.email,
           workspace: ws,
           workspaces,
@@ -184,12 +184,13 @@ export const handleAppRoutes = (
       const rawToken = decodeURIComponent(path.slice("/connect/".length))
       const actor = yield* resolveBrowserActor(request)
       if (!actor) {
-        return Response.redirect(`${origin}/auth/login?return_to=${encodeURIComponent(path)}`, 302)
+        return Response.redirect(`${baseUrl}/auth/login?return_to=${encodeURIComponent(url.pathname)}`, 302)
       }
       const handoff = yield* resolveConnectHandoffToken(rawToken)
       yield* assertWorkspaceAccess(actor, handoff.workspace_id, "admin")
       return htmlResponse(
         renderConnectHandoffPage({
+          basePath,
           workspaceId: handoff.workspace_id,
           connectToken: rawToken,
           mode: handoff.mode,
@@ -203,10 +204,10 @@ export const handleAppRoutes = (
       const rawToken = decodeURIComponent(path.slice("/invite/".length))
       const actor = yield* resolveBrowserActor(request)
       if (!actor) {
-        return Response.redirect(`${origin}/auth/login?return_to=${encodeURIComponent(path)}`, 302)
+        return Response.redirect(`${baseUrl}/auth/login?return_to=${encodeURIComponent(url.pathname)}`, 302)
       }
       const ws = yield* acceptInvite(actor, rawToken)
-      return Response.redirect(`${origin}/w/${ws.slug}?flash=${encodeURIComponent(`Joined ${ws.name}`)}`, 302)
+      return Response.redirect(`${baseUrl}/w/${ws.slug}?flash=${encodeURIComponent(`Joined ${ws.name}`)}`, 302)
     }
 
     // ── JSON REST API (/api/v1/*) ───────────────────────────────────────────
@@ -292,7 +293,7 @@ export const handleAppRoutes = (
               role: body.role as WorkspaceRole | undefined,
               expiresInDays: typeof body.expires_in_days === "number" ? body.expires_in_days : undefined,
             },
-            origin,
+            baseUrl,
           ),
           201,
         )
@@ -333,7 +334,7 @@ export const handleAppRoutes = (
             mode: body.mode === "update" ? "update" : "new",
             item_id: typeof body.item_id === "string" ? body.item_id : undefined,
           },
-          origin,
+          baseUrl,
         ),
       )
     }
@@ -343,7 +344,7 @@ export const handleAppRoutes = (
         yield* createPlaidLinkToken(actor, wsParam, {
           mode: body.mode === "update" ? "update" : "new",
           item_id: typeof body.item_id === "string" ? body.item_id : undefined,
-          webhookUrl: `${origin}/webhooks/plaid`,
+          webhookUrl: `${baseUrl}/webhooks/plaid`,
         }),
       )
     }

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
 import { createApiToken, createWorkspace, upsertOidcUser, type Actor } from "@radiant/core"
+import { buildRouteContext } from "../src/env"
 import { handleMcpRequest } from "../src/mcp"
 import { makeTestLayer } from "../../core/test/support/test-db"
 
@@ -16,7 +17,7 @@ describe("Worker MCP Streamable HTTP endpoint (/mcp)", () => {
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" }),
     })
     const unauthRes = await Effect.runPromise(
-      Effect.provide(handleMcpRequest(unauthReq, new URL(unauthReq.url)), layer),
+      Effect.provide(handleMcpRequest(unauthReq, buildRouteContext(new URL(unauthReq.url), "")), layer),
     )
     expect(unauthRes.status).toBe(401)
     expect(unauthRes.headers.get("www-authenticate")).toContain(
@@ -47,7 +48,7 @@ describe("Worker MCP Streamable HTTP endpoint (/mcp)", () => {
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
       })
       const res = await Effect.runPromise(
-        Effect.provide(handleMcpRequest(req, new URL(req.url)), layer),
+        Effect.provide(handleMcpRequest(req, buildRouteContext(new URL(req.url), "")), layer),
       )
       expect(res.status).toBe(200)
       return (await res.json()) as { result: Record<string, unknown> }

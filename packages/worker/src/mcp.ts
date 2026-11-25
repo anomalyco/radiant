@@ -57,7 +57,7 @@ import {
   type TransactionQueryInput,
 } from "@radiant/core"
 import type { TxPatch, WorkspaceRole } from "@radiant/database/schema"
-import { jsonResponse, type AppServices } from "./env"
+import { jsonResponse, type AppServices, type RouteContext } from "./env"
 
 const SERVER_INSTRUCTIONS = [
   "Radiant syncs Plaid bank accounts and transactions into PlanetScale MySQL with non-destructive overlays, declarative rules, instant non-LIFO undo, structured aggregations, and read-only SQL.",
@@ -792,7 +792,7 @@ const formatToolError = (err: unknown): string => {
 
 export const handleMcpRequest = (
   request: Request,
-  url: URL,
+  route: RouteContext,
 ): Effect.Effect<Response, unknown, AppServices> =>
   Effect.gen(function* () {
     if (request.method !== "POST") {
@@ -808,7 +808,7 @@ export const handleMcpRequest = (
         { error: "unauthorized", error_description: "Valid Bearer token required" },
         401,
         {
-          "www-authenticate": `Bearer resource_metadata="${url.origin}/.well-known/oauth-protected-resource/mcp"`,
+          "www-authenticate": `Bearer resource_metadata="${route.origin}/.well-known/oauth-protected-resource${route.basePath}/mcp"`,
         },
       )
     }
@@ -864,7 +864,7 @@ export const handleMcpRequest = (
           ? (rpc.params.arguments as Record<string, unknown>)
           : {}
 
-      const outcome = yield* Effect.result(dispatchTool(actor, url.origin, toolName, toolArgs))
+      const outcome = yield* Effect.result(dispatchTool(actor, route.baseUrl, toolName, toolArgs))
       if (outcome._tag === "Failure") {
         return jsonResponse({
           jsonrpc: "2.0",

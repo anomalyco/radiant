@@ -16,7 +16,7 @@ import {
   verifyBrowserSession,
   type Actor,
 } from "@radiant/core"
-import { formatSetCookie, getCookie, htmlResponse, jsonResponse, type AppServices } from "./env"
+import { formatSetCookie, getCookie, htmlResponse, jsonResponse, type AppServices, type RouteContext } from "./env"
 import { renderDeviceApprovePage, renderOAuthConsentPage } from "./ui"
 
 export const SESSION_COOKIE = "radiant_session"
@@ -48,11 +48,11 @@ export const resolveBrowserActor = (
 
 export const handleOAuthRoutes = (
   request: Request,
-  url: URL,
+  route: RouteContext,
 ): Effect.Effect<Response | null, unknown, AppServices> =>
   Effect.gen(function* () {
-    const origin = url.origin
-    const path = url.pathname
+    const { url, baseUrl, basePath, path } = route
+    const cookiePath = basePath || "/"
 
     // RFC 9728: OAuth Protected Resource Metadata
     if (
@@ -61,8 +61,8 @@ export const handleOAuthRoutes = (
         path === "/.well-known/oauth-protected-resource/mcp")
     ) {
       return jsonResponse({
-        resource: `${origin}/mcp`,
-        authorization_servers: [origin],
+        resource: `${baseUrl}/mcp`,
+        authorization_servers: [baseUrl],
         bearer_methods_supported: ["header"],
         scopes_supported: ["radiant"],
       })
@@ -71,12 +71,12 @@ export const handleOAuthRoutes = (
     // RFC 8414: OAuth Authorization Server Metadata
     if (request.method === "GET" && path === "/.well-known/oauth-authorization-server") {
       return jsonResponse({
-        issuer: origin,
-        authorization_endpoint: `${origin}/oauth/authorize`,
-        token_endpoint: `${origin}/oauth/token`,
-        registration_endpoint: `${origin}/oauth/register`,
-        revocation_endpoint: `${origin}/oauth/revoke`,
-        device_authorization_endpoint: `${origin}/api/v1/auth/device`,
+        issuer: baseUrl,
+        authorization_endpoint: `${baseUrl}/oauth/authorize`,
+        token_endpoint: `${baseUrl}/oauth/token`,
+        registration_endpoint: `${baseUrl}/oauth/register`,
+        revocation_endpoint: `${baseUrl}/oauth/revoke`,
+        device_authorization_endpoint: `${baseUrl}/api/v1/auth/device`,
         response_types_supported: ["code"],
         grant_types_supported: [
           "authorization_code",
@@ -101,11 +101,11 @@ export const handleOAuthRoutes = (
 
     // Browser sign-in start -> account.anoma.ly OIDC
     if (request.method === "GET" && path === "/auth/login") {
-      const returnTo = url.searchParams.get("return_to") ?? "/"
-      const safeReturn = returnTo.startsWith("/") && !returnTo.startsWith("//") ? returnTo : "/"
+      const returnTo = url.searchParams.get("return_to") ?? `${basePath || "/"}`
+      const safeReturn = returnTo.startsWith("/") && !returnTo.startsWith("//") ? returnTo : `${basePath || "/"}`
       const flow = yield* startUpstreamOidcFlow({
         kind: "browser_login",
-        origin,
+        origin: baseUrl,
         returnTo: safeReturn,
       })
       return new Response(null, {
@@ -114,6 +114,7 @@ export const handleOAuthRoutes = (
           location: flow.authorizeUrl,
           "set-cookie": formatSetCookie(FLOW_COOKIE, flow.browserToken, {
             maxAge: 600,
+            path: cookiePath,
             secure: isSecureOrigin(url),
           }),
         },
@@ -127,9 +128,10 @@ export const handleOAuthRoutes = (
       return new Response(null, {
         status: 302,
         headers: {
-          location: "/",
+          location: basePath || "/",
           "set-cookie": formatSetCookie(SESSION_COOKIE, "", {
             maxAge: 0,
+            path: cookiePath,
             secure: isSecureOrigin(url),
           }),
         },
@@ -150,25 +152,26 @@ export const handleOAuthRoutes = (
       }
       const browserToken = getCookie(request, FLOW_COOKIE)
       const { flow, user } = yield* completeUpstreamOidcCallback({
-        origin,
+        origin: baseUrl,
         state,
         code,
         iss,
         browserToken,
       })
       const sess = yield* createBrowserSession(user.id)
-      const dest = flow.return_to && flow.return_to.startsWith("/") ? flow.return_to : "/"
+      const dest = flow.return_to && flow.return_to.startsWith("/") ? flow.return_to : basePath || "/"
       const headers = new Headers({ location: dest })
       headers.append(
         "set-cookie",
         formatSetCookie(SESSION_COOKIE, sess.token, {
           maxAge: 30 * 86400,
+          path: cookiePath,
           secure: isSecureOrigin(url),
         }),
       )
       headers.append(
         "set-cookie",
-        formatSetCookie(FLOW_COOKIE, "", { maxAge: 0, secure: isSecureOrigin(url) }),
+        formatSetCookie(FLOW_COOKIE, "", { maxAge: 0, path: cookiePath, secure: isSecureOrigin(url) }),
       )
       return new Response(null, { status: 302, headers })
     }
@@ -195,12 +198,13 @@ export const handleOAuthRoutes = (
         const returnTo = `${url.pathname}${url.search}`
         return new Response(null, {
           status: 302,
-          headers: { location: `/auth/login?return_to=${encodeURIComponent(returnTo)}` },
+          headers: { location: `${basePath}/auth/login?return_to=${encodeURIComponent(returnTo)}` },
         })
       }
 
       return htmlResponse(
         renderOAuthConsentPage({
+          basePath,
           clientName: client.name,
           redirectUri,
           email: actor.email,
@@ -286,7 +290,7 @@ export const handleOAuthRoutes = (
     // Device Flow (RFC 8628)
     if (request.method === "POST" && path === "/api/v1/auth/device") {
       const form = yield* Effect.tryPromise(() => readFormOrJson(request))
-      const started = yield* startDeviceFlow(form.client_name || "An agent", origin)
+      const started = yield* startDeviceFlow(form.client_name || "An agent", baseUrl)
       return jsonResponse(started)
     }
 
@@ -304,11 +308,11 @@ export const handleOAuthRoutes = (
       if (!actor) {
         return new Response(null, {
           status: 302,
-          headers: { location: `/auth/login?return_to=${encodeURIComponent(url.pathname + url.search)}` },
+          headers: { location: `${basePath}/auth/login?return_to=${encodeURIComponent(url.pathname + url.search)}` },
         })
       }
       return htmlResponse(
-        renderDeviceApprovePage({ email: actor.email, code: url.searchParams.get("code") ?? "" }),
+        renderDeviceApprovePage({ basePath, email: actor.email, code: url.searchParams.get("code") ?? "" }),
       )
     }
 
@@ -319,6 +323,7 @@ export const handleOAuthRoutes = (
       const decided = yield* decideDeviceFlow(form.code ?? "", actor.userId, form.decision === "approve")
       return htmlResponse(
         renderDeviceApprovePage({
+          basePath,
           email: actor.email,
           code: decided.user_code,
           message: decided.status === "approved" ? "Approved. You can return to your agent." : "Denied.",

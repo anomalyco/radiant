@@ -16,8 +16,67 @@ export interface SyncQueueMessage {
   readonly trigger: "webhook" | "cron" | "manual"
 }
 
+export interface RouteContext {
+  /** Base path prefix without trailing slash, e.g. "/labs/radiant" or "" */
+  readonly basePath: string
+  /** Origin + basePath without trailing slash, e.g. "https://anoma.ly/labs/radiant" */
+  readonly baseUrl: string
+  /** Request origin, e.g. "https://anoma.ly" */
+  readonly origin: string
+  /** Normalized internal route path starting with "/", with basePath stripped */
+  readonly path: string
+  /** Original request URL */
+  readonly url: URL
+}
+
+export const buildRouteContext = (url: URL, configuredBasePath?: string): RouteContext => {
+  const cleanBase = (configuredBasePath ?? "").replace(/\/+$/, "")
+  const rawPath = url.pathname
+
+  // RFC 9728 / RFC 8414 path-inserted well-known routes at host root
+  if (cleanBase && rawPath.startsWith(`/.well-known/oauth-protected-resource${cleanBase}`)) {
+    const suffix = rawPath.slice(`/.well-known/oauth-protected-resource${cleanBase}`.length) || ""
+    return {
+      basePath: cleanBase,
+      baseUrl: `${url.origin}${cleanBase}`,
+      origin: url.origin,
+      path: `/.well-known/oauth-protected-resource${suffix}`,
+      url,
+    }
+  }
+  if (cleanBase && rawPath === `/.well-known/oauth-authorization-server${cleanBase}`) {
+    return {
+      basePath: cleanBase,
+      baseUrl: `${url.origin}${cleanBase}`,
+      origin: url.origin,
+      path: "/.well-known/oauth-authorization-server",
+      url,
+    }
+  }
+
+  if (cleanBase && (rawPath === cleanBase || rawPath.startsWith(`${cleanBase}/`))) {
+    const stripped = rawPath.slice(cleanBase.length) || "/"
+    return {
+      basePath: cleanBase,
+      baseUrl: `${url.origin}${cleanBase}`,
+      origin: url.origin,
+      path: stripped,
+      url,
+    }
+  }
+
+  return {
+    basePath: "",
+    baseUrl: url.origin,
+    origin: url.origin,
+    path: rawPath || "/",
+    url,
+  }
+}
+
 export interface Env {
   readonly STAGE: string
+  readonly BASE_PATH?: string
   readonly ACCOUNT_ISSUER: string
   readonly ACCOUNT_CLIENT_ID: string
   readonly PLAID_ENV: string

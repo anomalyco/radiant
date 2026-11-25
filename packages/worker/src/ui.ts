@@ -55,30 +55,30 @@ const fmtMoney = (cents: number | null, currency = "USD"): string => {
   return `${sign}${currency === "USD" ? "$" : `${currency} `}${abs.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
-export const renderLandingPage = (origin: string): string =>
+export const renderLandingPage = (baseUrl: string, basePath = ""): string =>
   layout(
     "Sign in",
     `
     <header class="top">
       <h1>Radiant</h1>
-      <a class="btn primary" href="/auth/login">Sign in with Anomaly</a>
+      <a class="btn primary" href="${escapeHtml(basePath)}/auth/login">Sign in with Anomaly</a>
     </header>
     <div class="card stack">
       <p style="color:var(--fg);font-size:15px;">Sync Plaid accounts into PlanetScale MySQL and query, overlay, and automate them over MCP.</p>
       <p>Create workspaces, invite teammates or family, connect bank accounts via Plaid Link, apply non-destructive overlays & rules with instant undo, and run structured aggregations or read-only SQL from your agent.</p>
       <div class="inline">
-        <a class="btn primary" href="/auth/login">Sign in to continue</a>
+        <a class="btn primary" href="${escapeHtml(basePath)}/auth/login">Sign in to continue</a>
       </div>
     </div>
     <div class="card">
       <h3>MCP Endpoint</h3>
-      <pre>${escapeHtml(origin)}/mcp</pre>
+      <pre>${escapeHtml(baseUrl)}/mcp</pre>
       <p class="muted">Supports OAuth 2.1 with dynamic client registration and PKCE (OpenCode, Claude, Cursor).</p>
     </div>
   `,
   )
 
-export const renderEmptyWorkspacesPage = (email: string): string =>
+export const renderEmptyWorkspacesPage = (email: string, basePath = ""): string =>
   layout(
     "Create workspace",
     `
@@ -86,13 +86,13 @@ export const renderEmptyWorkspacesPage = (email: string): string =>
       <h1>Radiant</h1>
       <div class="inline">
         <span class="muted">${escapeHtml(email)}</span>
-        <form method="POST" action="/auth/logout"><button type="submit">Sign out</button></form>
+        <form method="POST" action="${escapeHtml(basePath)}/auth/logout"><button type="submit">Sign out</button></form>
       </div>
     </header>
     <div class="card stack">
       <h2>Create your first workspace</h2>
       <p>Group your Plaid accounts, rules, overlays, and collaborators inside a workspace.</p>
-      <form class="inline" method="POST" action="/ui/workspaces">
+      <form class="inline" method="POST" action="${escapeHtml(basePath)}/ui/workspaces">
         <input name="name" placeholder="Personal" required maxlength="120" />
         <input name="currency" value="USD" maxlength="3" style="width:76px" />
         <button class="primary" type="submit">Create workspace</button>
@@ -102,7 +102,8 @@ export const renderEmptyWorkspacesPage = (email: string): string =>
   )
 
 export const renderWorkspaceDashboard = (input: {
-  readonly origin: string
+  readonly baseUrl: string
+  readonly basePath: string
   readonly email: string
   readonly workspace: WorkspaceRecord
   readonly workspaces: ReadonlyArray<WorkspaceRecord>
@@ -120,7 +121,8 @@ export const renderWorkspaceDashboard = (input: {
   readonly flash?: string | null
 }): string => {
   const ws = input.workspace
-  const mcpUrl = `${input.origin.replace(/\/$/, "")}/mcp`
+  const bp = input.basePath
+  const mcpUrl = `${input.baseUrl.replace(/\/$/, "")}/mcp`
   const opencodeSnippet = JSON.stringify(
     { mcp: { radiant: { type: "remote", url: mcpUrl } } },
     null,
@@ -130,7 +132,7 @@ export const renderWorkspaceDashboard = (input: {
   const wsOptions = input.workspaces
     .map(
       (w) =>
-        `<option value="/w/${escapeHtml(w.slug)}" ${w.id === ws.id ? "selected" : ""}>${escapeHtml(w.name)} (${escapeHtml(w.role)})</option>`,
+        `<option value="${escapeHtml(bp)}/w/${escapeHtml(w.slug)}" ${w.id === ws.id ? "selected" : ""}>${escapeHtml(w.name)} (${escapeHtml(w.role)})</option>`,
     )
     .join("")
 
@@ -228,7 +230,7 @@ export const renderWorkspaceDashboard = (input: {
       </div>
       <div class="inline">
         <span class="muted">${escapeHtml(input.email)}</span>
-        <form method="POST" action="/auth/logout"><button type="submit">Sign out</button></form>
+        <form method="POST" action="${escapeHtml(bp)}/auth/logout"><button type="submit">Sign out</button></form>
       </div>
     </header>
 
@@ -283,7 +285,7 @@ export const renderWorkspaceDashboard = (input: {
 
     <div class="card">
       <h2 style="margin-top:0">New Workspace</h2>
-      <form class="inline" method="POST" action="/ui/workspaces">
+      <form class="inline" method="POST" action="${escapeHtml(bp)}/ui/workspaces">
         <input name="name" placeholder="Household" required maxlength="120" />
         <input name="currency" value="USD" maxlength="3" style="width:76px" />
         <button type="submit">Create</button>
@@ -293,8 +295,9 @@ export const renderWorkspaceDashboard = (input: {
     <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
     <script>
       const WS = ${JSON.stringify(ws.id)};
+      const BASE = ${JSON.stringify(bp)};
       async function api(path, opts = {}) {
-        const res = await fetch(path, { headers: { "content-type": "application/json" }, ...opts });
+        const res = await fetch(BASE + path, { headers: { "content-type": "application/json" }, ...opts });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || data.message || res.statusText);
         return data;
@@ -373,6 +376,7 @@ export const renderWorkspaceDashboard = (input: {
 }
 
 export const renderConnectHandoffPage = (input: {
+  readonly basePath: string
   readonly workspaceId: string
   readonly connectToken: string
   readonly mode: "new" | "update"
@@ -395,7 +399,7 @@ export const renderConnectHandoffPage = (input: {
         const status = document.getElementById("status");
         status.textContent = "Creating link token...";
         try {
-          const res = await fetch("/api/v1/workspaces/" + ${JSON.stringify(input.workspaceId)} + "/plaid/link-token", {
+          const res = await fetch(${JSON.stringify(input.basePath)} + "/api/v1/workspaces/" + ${JSON.stringify(input.workspaceId)} + "/plaid/link-token", {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ mode: ${JSON.stringify(input.mode)}, item_id: ${JSON.stringify(input.itemId)} }),
@@ -406,7 +410,7 @@ export const renderConnectHandoffPage = (input: {
             token: data.link_token,
             onSuccess: async (public_token) => {
               status.textContent = "Syncing accounts and transactions...";
-              const ex = await fetch("/api/v1/workspaces/" + ${JSON.stringify(input.workspaceId)} + "/plaid/exchange", {
+              const ex = await fetch(${JSON.stringify(input.basePath)} + "/api/v1/workspaces/" + ${JSON.stringify(input.workspaceId)} + "/plaid/exchange", {
                 method: "POST",
                 headers: { "content-type": "application/json" },
                 body: JSON.stringify({ public_token, connect_token: ${JSON.stringify(input.connectToken)} }),
@@ -426,6 +430,7 @@ export const renderConnectHandoffPage = (input: {
   )
 
 export const renderOAuthConsentPage = (input: {
+  readonly basePath: string
   readonly clientName: string
   readonly redirectUri: string
   readonly email: string
@@ -442,7 +447,7 @@ export const renderOAuthConsentPage = (input: {
       <p>Signed in as <strong>${escapeHtml(input.email)}</strong>.</p>
       <p>This client is requesting access to your Radiant workspaces, accounts, transactions, overlays, rules, and SQL queries.</p>
       <p class="muted">Redirect URI: <code>${escapeHtml(input.redirectUri)}</code></p>
-      <form class="inline" method="POST" action="/oauth/authorize">
+      <form class="inline" method="POST" action="${escapeHtml(input.basePath)}/oauth/authorize">
         ${inputs}
         <button class="primary" type="submit" name="decision" value="approve">Approve</button>
         <button type="submit" name="decision" value="deny">Deny</button>
@@ -453,6 +458,7 @@ export const renderOAuthConsentPage = (input: {
 }
 
 export const renderDeviceApprovePage = (input: {
+  readonly basePath: string
   readonly email: string
   readonly code: string
   readonly message?: string
@@ -464,7 +470,7 @@ export const renderDeviceApprovePage = (input: {
       <h1>Approve Agent Sign-In</h1>
       <p>Signed in as <strong>${escapeHtml(input.email)}</strong>. Verify the code shown by your agent before approving.</p>
       ${input.message ? `<p style="color:var(--fg)"><strong>${escapeHtml(input.message)}</strong></p>` : ""}
-      <form class="inline" method="POST" action="/device">
+      <form class="inline" method="POST" action="${escapeHtml(input.basePath)}/device">
         <input name="code" value="${escapeHtml(input.code)}" placeholder="BCDF-GHJK" required />
         <button class="primary" type="submit" name="decision" value="approve">Approve</button>
         <button type="submit" name="decision" value="deny">Deny</button>
