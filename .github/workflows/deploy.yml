@@ -34,7 +34,9 @@ jobs:
       - run: bun run test
       - name: Build Worker bundle
         working-directory: packages/worker
-        run: bunx cf deploy --dry-run --mode "$MODE"
+        run: |
+          bunx cf deploy --dry-run --mode "$MODE"
+          rm -rf .cloudflare/output/v0/workers/default/bundle/.vite
       - id: upload
         uses: ./.github/release/upload
         with:
