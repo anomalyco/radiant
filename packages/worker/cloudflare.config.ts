@@ -42,7 +42,7 @@ export default defineConfig(({ mode }) => {
         PLAID_CLIENT_ID: bindings.secret(),
         PLAID_SECRET: bindings.secret(),
       },
-      ...(customDomain ? { domains: [customDomain], workersDev: false, previewUrls: false } : { workersDev: dev, previewUrls: false }),
+      ...(customDomain ? { domains: [customDomain], workersDev: false, previewUrls: false } : { workersDev: true, previewUrls: false }),
       observability: { enabled: true, redactQueryString: true },
     },
   }

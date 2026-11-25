@@ -1,5 +1,7 @@
 # Radiant
 
+<!-- tallow -->
+
 Agent-native financial data hub on Cloudflare Workers, Effect v4, and PlanetScale MySQL.
 Design and architecture live in [docs/plan.md](docs/plan.md).
 
