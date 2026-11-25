@@ -1,0 +1,123 @@
+name: Deploy
+
+on:
+  push:
+    branches: [dev, production]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/production'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      digest: ${{ steps.upload.outputs.digest }}
+    env:
+      MODE: ${{ github.ref_name == 'production' && 'production' || 'dev' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76
+        with:
+          bun-version: "1.4.4"
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run test
+      - name: Build Worker bundle
+        working-directory: packages/worker
+        run: bunx cf deploy --dry-run --mode "$MODE"
+      - id: upload
+        uses: ./.github/release/upload
+        with:
+          name: worker-${{ env.MODE }}
+          path: packages/worker/.cloudflare/output
+          retention-days: 7
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment:
+      name: ${{ github.ref_name == 'production' && 'production' || 'dev' }}
+      url: ${{ github.ref_name == 'production' && 'https://radiant-production.anomalyco.workers.dev' || 'https://radiant-dev.anomalyco-dev.workers.dev' }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      MODE: ${{ github.ref_name == 'production' && 'production' || 'dev' }}
+    steps:
+      - name: Require the branch for the mode
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          case "$MODE:$REF" in
+            production:refs/heads/production | dev:refs/heads/dev) ;;
+            *) echo "::error::$MODE deploys only from its own branch, not $REF."; exit 1 ;;
+          esac
+      - name: Check out the release scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: /.github/release/
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - name: Install the pinned cf CLI
+        working-directory: .github/release/cf
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Download and verify artifact
+        uses: ./.github/release/download
+        with:
+          pattern: worker-${{ env.MODE }}
+          digests: worker-${{ env.MODE }}=${{ needs.build.outputs.digest }}
+      - id: aws
+        name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::604439173067:role/github/radiant-${{ env.MODE }}
+          role-session-name: radiant-${{ github.run_id }}
+          role-duration-seconds: 900
+          aws-region: us-east-1
+          output-env-credentials: false
+          output-credentials: true
+      - name: Mint Cloudflare token
+        id: cloudflare-token
+        env:
+          CLOUDFLARE_TOKEN_URL: ${{ vars.CLOUDFLARE_TOKEN_URL }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          AWS_ACCESS_KEY_ID: ${{ steps.aws.outputs.aws-access-key-id }}
+          AWS_SECRET_ACCESS_KEY: ${{ steps.aws.outputs.aws-secret-access-key }}
+          AWS_SESSION_TOKEN: ${{ steps.aws.outputs.aws-session-token }}
+        run: bash .github/release/cloudflare-token.sh
+      - name: Deploy Worker
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ steps.cloudflare-token.outputs.token }}
+          AWS_ACCESS_KEY_ID: ${{ steps.aws.outputs.aws-access-key-id }}
+          AWS_SECRET_ACCESS_KEY: ${{ steps.aws.outputs.aws-secret-access-key }}
+          AWS_SESSION_TOKEN: ${{ steps.aws.outputs.aws-session-token }}
+        run: bash .github/release/deploy-worker.sh "$MODE" "$RUNNER_TEMP/in/worker-$MODE"
+
+  verify:
+    needs: deploy
+    if: github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Verify live dev health
+        run: |
+          status=$(curl --silent --max-time 20 --output /dev/null --write-out '%{http_code}' "https://radiant-dev.anomalyco-dev.workers.dev/health")
+          echo "/health -> $status"
+          test "$status" = 200
