@@ -548,7 +548,26 @@ export const syncItemInternal = (
                  raw_amount_cents, currency, date, authorized_date, name, merchant_name,
                  merchant_entity_id, pfc_primary, pfc_detailed, pfc_confidence,
                  payment_channel, pending, counterparty_name, raw_json, created_at, updated_at)
-               VALUES ${rowPh}`,
+               VALUES ${rowPh}
+               ON DUPLICATE KEY UPDATE
+                 account_id = VALUES(account_id),
+                 pending_transaction_id = VALUES(pending_transaction_id),
+                 raw_amount_cents = VALUES(raw_amount_cents),
+                 currency = VALUES(currency),
+                 date = VALUES(date),
+                 authorized_date = VALUES(authorized_date),
+                 name = VALUES(name),
+                 merchant_name = VALUES(merchant_name),
+                 merchant_entity_id = VALUES(merchant_entity_id),
+                 pfc_primary = VALUES(pfc_primary),
+                 pfc_detailed = VALUES(pfc_detailed),
+                 pfc_confidence = VALUES(pfc_confidence),
+                 payment_channel = VALUES(payment_channel),
+                 pending = VALUES(pending),
+                 counterparty_name = VALUES(counterparty_name),
+                 raw_json = VALUES(raw_json),
+                 removed_at = NULL,
+                 updated_at = VALUES(updated_at)`,
               insertParams,
             )
           }

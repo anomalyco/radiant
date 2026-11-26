@@ -47,8 +47,14 @@ export const createSqliteTestDatabase = (): DatabaseInterface => {
   const sqlite = new SqliteDb(":memory:")
   sqlite.exec("PRAGMA journal_mode = MEMORY;")
 
-  const translateMysqlExpr = (s: string) =>
-    s.replace(/CONCAT\(' ',\s*([a-zA-Z0-9_.]+),\s*' '\)/g, "(' ' || $1 || ' ')")
+  const translateMysqlExpr = (s: string) => {
+    let out = s.replace(/CONCAT\(' ',\s*([a-zA-Z0-9_.]+),\s*' '\)/g, "(' ' || $1 || ' ')")
+    const onDupIdx = out.indexOf("ON DUPLICATE KEY UPDATE")
+    if (onDupIdx !== -1 && /^\s*INSERT\s+INTO/i.test(out)) {
+      out = out.slice(0, onDupIdx).replace(/^\s*INSERT\s+INTO/i, "INSERT OR REPLACE INTO")
+    }
+    return out
+  }
 
   const migrationsDir = join(import.meta.dir, "../../../../migrations")
   const dirs = readdirSync(migrationsDir, { withFileTypes: true })
@@ -61,7 +67,7 @@ export const createSqliteTestDatabase = (): DatabaseInterface => {
     const stmts = raw
       .split("--> statement-breakpoint")
       .map((s) => mysqlDdlToSqlite(s.trim()))
-      .filter((s) => s.length > 0)
+      .filter((s) => s.length > 0 && !/^ALTER TABLE\s+.*MODIFY COLUMN/i.test(s))
     for (const stmt of stmts) {
       sqlite.exec(stmt)
     }

@@ -5,7 +5,7 @@ import { pkceS256Challenge, randomToken, randomUserCode, sha256Hex } from "./cry
 import { Database, parseJsonColumn } from "./db"
 import { ConflictError, ForbiddenError, NotFoundError, UnauthorizedError, ValidationError } from "./errors"
 import { Id } from "./id"
-import { assertWorkspaceAccess, type Actor } from "./workspace"
+import { assertWorkspaceAccess, createWorkspace, listWorkspaces, type Actor } from "./workspace"
 
 export interface AuthConfigInterface {
   readonly accountIssuer: string
@@ -266,6 +266,21 @@ export const completeUpstreamOidcCallback = (input: {
       email,
       name,
     })
+
+    // Ensure every user has a default workspace immediately on sign-in (for seamless MCP & web onboarding)
+    const signInActor: Actor = {
+      type: "user",
+      userId: user.id,
+      email: user.email,
+      name: user.name,
+      clientName: "Radiant Sign-In",
+    }
+    const existingWorkspaces = yield* listWorkspaces(signInActor)
+    if (existingWorkspaces.length === 0) {
+      yield* createWorkspace(signInActor, { name: "Personal", currency: "USD" }).pipe(
+        Effect.catch(() => Effect.void),
+      )
+    }
 
     yield* db.execute("UPDATE oauth_flow SET consumed_at = ?, approved_user_id = ? WHERE id = ?", [
       new Date(),
