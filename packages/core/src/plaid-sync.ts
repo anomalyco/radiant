@@ -1,7 +1,7 @@
 import { Context, Effect, Layer } from "effect"
 import type { SyncTrigger } from "@radiant/database/schema"
 import { decryptSecret, encryptSecret, randomToken, sha256Hex } from "./crypto"
-import { Database, toBool, toNullableNum, toNum, type DbExecutor } from "./db"
+import { Database, toBool, toNullableNum, toNum, type DbExecutor, type SqlParam } from "./db"
 import { NotFoundError, PlaidApiError, ValidationError } from "./errors"
 import { Id } from "./id"
 import { rematerializeTransactions } from "./overlay"
@@ -442,9 +442,11 @@ export const syncItemInternal = (
         const pages = yield* fetchAllSyncPages(plaid, accessToken, item.sync_cursor)
 
         const now = new Date()
-        return yield* db.transaction((tx) =>
+
+        // 1. Update accounts & balance snapshots in a small fast transaction
+        const accMap = yield* db.transaction((tx) =>
           Effect.gen(function* () {
-            const accMap = yield* upsertAccountsAndSnapshots(
+            const map = yield* upsertAccountsAndSnapshots(
               tx,
               workspaceId,
               itemId,
@@ -453,114 +455,164 @@ export const syncItemInternal = (
               accResp.accounts,
               now,
             )
-
-            // Also load any existing accounts for this item in case of partial response
             const existingAccs = yield* tx.query<{ id: string; plaid_account_id: string }>(
               "SELECT id, plaid_account_id FROM raw_account WHERE workspace_id = ? AND item_id = ?",
               [workspaceId, itemId],
             )
             for (const a of existingAccs.rows) {
-              if (!accMap.has(a.plaid_account_id)) accMap.set(a.plaid_account_id, a.id)
+              if (!map.has(a.plaid_account_id)) map.set(a.plaid_account_id, a.id)
             }
+            return map
+          }),
+        )
 
-            const impactedTxIds = new Set<string>()
-            const upserts = [...pages.added, ...pages.modified]
+        const impactedTxIds = new Set<string>()
+        // Deduplicate by plaid_transaction_id (latest occurrence wins if added+modified in same sync)
+        const byPlaidId = new Map<string, PlaidTransactionDto>()
+        for (const ptx of [...pages.added, ...pages.modified]) {
+          if (accMap.has(ptx.account_id)) byPlaidId.set(ptx.transaction_id, ptx)
+        }
+        const upserts = Array.from(byPlaidId.values())
 
-            for (const ptx of upserts) {
-              const internalAccountId = accMap.get(ptx.account_id)
-              if (!internalAccountId) continue
+        // 2. Bulk upsert raw_transactions in 40-row chunks (avoids Vitess 20s tx killer timeout!)
+        const chunkOf = <T>(arr: ReadonlyArray<T>, size: number): Array<Array<T>> => {
+          const out: Array<Array<T>> = []
+          for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
+          return out
+        }
 
-              const existing = yield* tx.query<{ id: string }>(
-                "SELECT id FROM raw_transaction WHERE workspace_id = ? AND plaid_transaction_id = ? LIMIT 1",
-                [workspaceId, ptx.transaction_id],
-              )
+        const pendingLinks: Array<{ postedTxId: string; pendingPlaidId: string; rawAmountCents: number }> = []
 
-              const rawAmountCents = Math.round(ptx.amount * 100)
+        for (const batch of chunkOf(upserts, 40)) {
+          const pIds = batch.map((b) => b.transaction_id)
+          const existingRes = yield* db.query<{ id: string; plaid_transaction_id: string }>(
+            `SELECT id, plaid_transaction_id FROM raw_transaction
+             WHERE workspace_id = ? AND plaid_transaction_id IN (${pIds.map(() => "?").join(", ")})`,
+            [workspaceId, ...pIds],
+          )
+          const existingMap = new Map(existingRes.rows.map((r) => [r.plaid_transaction_id, r.id]))
+
+          const toInsert: Array<{ txId: string; accountId: string; ptx: PlaidTransactionDto; rawAmountCents: number }> = []
+          const toUpdate: Array<{ txId: string; accountId: string; ptx: PlaidTransactionDto; rawAmountCents: number }> = []
+
+          for (const ptx of batch) {
+            const accountId = accMap.get(ptx.account_id)!
+            const rawAmountCents = Math.round(ptx.amount * 100)
+            const existingId = existingMap.get(ptx.transaction_id)
+            const txId = existingId ?? Id.tx()
+            impactedTxIds.add(txId)
+            if (existingId) toUpdate.push({ txId, accountId, ptx, rawAmountCents })
+            else toInsert.push({ txId, accountId, ptx, rawAmountCents })
+
+            if (!ptx.pending && ptx.pending_transaction_id) {
+              pendingLinks.push({ postedTxId: txId, pendingPlaidId: ptx.pending_transaction_id, rawAmountCents })
+            }
+          }
+
+          if (toInsert.length > 0) {
+            const rowPh = toInsert
+              .map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+              .join(", ")
+            const insertParams: Array<SqlParam> = []
+            for (const { txId, accountId, ptx, rawAmountCents } of toInsert) {
               const currency = (ptx.iso_currency_code ?? ptx.unofficial_currency_code ?? "USD").toUpperCase()
               const counterpartyName = ptx.counterparties?.[0]?.name ?? null
-              let txId = existing.rows[0]?.id
+              insertParams.push(
+                workspaceId,
+                txId,
+                accountId,
+                itemId,
+                ptx.transaction_id,
+                ptx.pending_transaction_id ?? null,
+                rawAmountCents,
+                currency,
+                ptx.date,
+                ptx.authorized_date ?? null,
+                ptx.name,
+                ptx.merchant_name ?? null,
+                ptx.merchant_entity_id ?? null,
+                ptx.personal_finance_category?.primary ?? null,
+                ptx.personal_finance_category?.detailed ?? null,
+                ptx.personal_finance_category?.confidence_level ?? null,
+                ptx.payment_channel ?? null,
+                ptx.pending ? 1 : 0,
+                counterpartyName,
+                JSON.stringify(ptx),
+                now,
+                now,
+              )
+            }
+            yield* db.execute(
+              `INSERT INTO raw_transaction
+                (workspace_id, id, account_id, item_id, plaid_transaction_id, pending_transaction_id,
+                 raw_amount_cents, currency, date, authorized_date, name, merchant_name,
+                 merchant_entity_id, pfc_primary, pfc_detailed, pfc_confidence,
+                 payment_channel, pending, counterparty_name, raw_json, created_at, updated_at)
+               VALUES ${rowPh}`,
+              insertParams,
+            )
+          }
 
-              if (txId) {
-                yield* tx.execute(
-                  `UPDATE raw_transaction
-                   SET account_id = ?, pending_transaction_id = ?, raw_amount_cents = ?,
-                       currency = ?, date = ?, authorized_date = ?, name = ?, merchant_name = ?,
-                       merchant_entity_id = ?, pfc_primary = ?, pfc_detailed = ?, pfc_confidence = ?,
-                       payment_channel = ?, pending = ?, counterparty_name = ?, raw_json = ?,
-                       removed_at = NULL, updated_at = ?
-                   WHERE workspace_id = ? AND id = ?`,
-                  [
-                    internalAccountId,
-                    ptx.pending_transaction_id ?? null,
-                    rawAmountCents,
-                    currency,
-                    ptx.date,
-                    ptx.authorized_date ?? null,
-                    ptx.name,
-                    ptx.merchant_name ?? null,
-                    ptx.merchant_entity_id ?? null,
-                    ptx.personal_finance_category?.primary ?? null,
-                    ptx.personal_finance_category?.detailed ?? null,
-                    ptx.personal_finance_category?.confidence_level ?? null,
-                    ptx.payment_channel ?? null,
-                    ptx.pending ? 1 : 0,
-                    counterpartyName,
-                    JSON.stringify(ptx),
-                    now,
-                    workspaceId,
-                    txId,
-                  ],
-                )
-              } else {
-                txId = Id.tx()
-                yield* tx.execute(
-                  `INSERT INTO raw_transaction
-                    (workspace_id, id, account_id, item_id, plaid_transaction_id, pending_transaction_id,
-                     raw_amount_cents, currency, date, authorized_date, name, merchant_name,
-                     merchant_entity_id, pfc_primary, pfc_detailed, pfc_confidence,
-                     payment_channel, pending, counterparty_name, raw_json, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                  [
-                    workspaceId,
-                    txId,
-                    internalAccountId,
-                    itemId,
-                    ptx.transaction_id,
-                    ptx.pending_transaction_id ?? null,
-                    rawAmountCents,
-                    currency,
-                    ptx.date,
-                    ptx.authorized_date ?? null,
-                    ptx.name,
-                    ptx.merchant_name ?? null,
-                    ptx.merchant_entity_id ?? null,
-                    ptx.personal_finance_category?.primary ?? null,
-                    ptx.personal_finance_category?.detailed ?? null,
-                    ptx.personal_finance_category?.confidence_level ?? null,
-                    ptx.payment_channel ?? null,
-                    ptx.pending ? 1 : 0,
-                    counterpartyName,
-                    JSON.stringify(ptx),
-                    now,
-                    now,
-                  ],
-                )
-              }
+          for (const { txId, accountId, ptx, rawAmountCents } of toUpdate) {
+            const currency = (ptx.iso_currency_code ?? ptx.unofficial_currency_code ?? "USD").toUpperCase()
+            const counterpartyName = ptx.counterparties?.[0]?.name ?? null
+            yield* db.execute(
+              `UPDATE raw_transaction
+               SET account_id = ?, pending_transaction_id = ?, raw_amount_cents = ?,
+                   currency = ?, date = ?, authorized_date = ?, name = ?, merchant_name = ?,
+                   merchant_entity_id = ?, pfc_primary = ?, pfc_detailed = ?, pfc_confidence = ?,
+                   payment_channel = ?, pending = ?, counterparty_name = ?, raw_json = ?,
+                   removed_at = NULL, updated_at = ?
+               WHERE workspace_id = ? AND id = ?`,
+              [
+                accountId,
+                ptx.pending_transaction_id ?? null,
+                rawAmountCents,
+                currency,
+                ptx.date,
+                ptx.authorized_date ?? null,
+                ptx.name,
+                ptx.merchant_name ?? null,
+                ptx.merchant_entity_id ?? null,
+                ptx.personal_finance_category?.primary ?? null,
+                ptx.personal_finance_category?.detailed ?? null,
+                ptx.personal_finance_category?.confidence_level ?? null,
+                ptx.payment_channel ?? null,
+                ptx.pending ? 1 : 0,
+                counterpartyName,
+                JSON.stringify(ptx),
+                now,
+                workspaceId,
+                txId,
+              ],
+            )
+          }
+        }
 
-              impactedTxIds.add(txId)
+        // 3. Pending -> Posted reconciliation & automatic overlay/split carry-forward
+        if (pendingLinks.length > 0) {
+          for (const linkChunk of chunkOf(pendingLinks, 50)) {
+            const pendingPlaidIds = linkChunk.map((l) => l.pendingPlaidId)
+            const pendingRows = yield* db.query<{
+              id: string
+              plaid_transaction_id: string
+              superseded_by: string | null
+            }>(
+              `SELECT id, plaid_transaction_id, superseded_by FROM raw_transaction
+               WHERE workspace_id = ? AND plaid_transaction_id IN (${pendingPlaidIds.map(() => "?").join(", ")})`,
+              [workspaceId, ...pendingPlaidIds],
+            )
+            const pendingByPlaidId = new Map(pendingRows.rows.map((r) => [r.plaid_transaction_id, r]))
 
-              // Pending -> Posted reconciliation & automatic overlay/split carry-forward!
-              if (!ptx.pending && ptx.pending_transaction_id) {
-                const pendingRow = yield* tx.query<{ id: string; superseded_by: string | null }>(
-                  `SELECT id, superseded_by FROM raw_transaction
-                   WHERE workspace_id = ? AND plaid_transaction_id = ? LIMIT 1`,
-                  [workspaceId, ptx.pending_transaction_id],
-                )
-                const pendingTx = pendingRow.rows[0]
-                if (pendingTx && !pendingTx.superseded_by) {
+            for (const link of linkChunk) {
+              const pendingTx = pendingByPlaidId.get(link.pendingPlaidId)
+              if (!pendingTx || pendingTx.superseded_by) continue
+
+              yield* db.transaction((tx) =>
+                Effect.gen(function* () {
                   yield* tx.execute(
                     "UPDATE raw_transaction SET superseded_by = ?, updated_at = ? WHERE workspace_id = ? AND id = ?",
-                    [txId, now, workspaceId, pendingTx.id],
+                    [link.postedTxId, now, workspaceId, pendingTx.id],
                   )
                   impactedTxIds.add(pendingTx.id)
 
@@ -594,15 +646,14 @@ export const syncItemInternal = (
                           workspaceId,
                           Id.overlay(),
                           carryBatchId,
-                          txId,
+                          link.postedTxId,
                           toNum(ov.seq),
                           typeof ov.patch_json === "string" ? ov.patch_json : JSON.stringify(ov.patch_json),
                           now,
                         ],
                       )
                     }
-                    // Carry forward splits only if the posted amount still matches the split sum
-                    const postedAccountingCents = rawAmountCents === 0 ? 0 : -rawAmountCents
+                    const postedAccountingCents = link.rawAmountCents === 0 ? 0 : -link.rawAmountCents
                     const splitSum = pendingSplits.rows.reduce((acc, s) => acc + toNum(s.amount_cents), 0)
                     if (pendingSplits.rows.length > 0 && splitSum === postedAccountingCents) {
                       for (const sp of pendingSplits.rows) {
@@ -615,7 +666,7 @@ export const syncItemInternal = (
                             workspaceId,
                             Id.split(),
                             carryBatchId,
-                            txId,
+                            link.postedTxId,
                             toNum(sp.line_index),
                             toNum(sp.amount_cents),
                             sp.category,
@@ -636,33 +687,44 @@ export const syncItemInternal = (
                       [
                         workspaceId,
                         carryBatchId,
-                        `Carried overlays forward from pending tx ${pendingTx.id} to posted tx ${txId}`,
-                        JSON.stringify({ from_tx_id: pendingTx.id, to_tx_id: txId }),
+                        `Carried overlays forward from pending tx ${pendingTx.id} to posted tx ${link.postedTxId}`,
+                        JSON.stringify({ from_tx_id: pendingTx.id, to_tx_id: link.postedTxId }),
                         now,
                       ],
                     )
                   }
-                }
-              }
-            }
-
-            // Soft-delete removed Plaid transactions
-            for (const removedPlaidId of pages.removed) {
-              const found = yield* tx.query<{ id: string }>(
-                "SELECT id FROM raw_transaction WHERE workspace_id = ? AND plaid_transaction_id = ? LIMIT 1",
-                [workspaceId, removedPlaidId],
+                }),
               )
-              if (found.rows[0]) {
-                yield* tx.execute(
-                  "UPDATE raw_transaction SET removed_at = ?, updated_at = ? WHERE workspace_id = ? AND id = ?",
-                  [now, now, workspaceId, found.rows[0].id],
-                )
-                impactedTxIds.add(found.rows[0].id)
-              }
             }
+          }
+        }
 
-            const mat = yield* rematerializeTransactions(tx, workspaceId, Array.from(impactedTxIds))
+        // 4. Bulk soft-delete removed Plaid transactions
+        if (pages.removed.length > 0) {
+          for (const remChunk of chunkOf(pages.removed, 100)) {
+            const foundRes = yield* db.query<{ id: string }>(
+              `SELECT id FROM raw_transaction
+               WHERE workspace_id = ? AND plaid_transaction_id IN (${remChunk.map(() => "?").join(", ")})`,
+              [workspaceId, ...remChunk],
+            )
+            const foundIds = foundRes.rows.map((r) => r.id)
+            if (foundIds.length > 0) {
+              yield* db.execute(
+                `UPDATE raw_transaction SET removed_at = ?, updated_at = ?
+                 WHERE workspace_id = ? AND id IN (${foundIds.map(() => "?").join(", ")})`,
+                [now, now, workspaceId, ...foundIds],
+              )
+              for (const fid of foundIds) impactedTxIds.add(fid)
+            }
+          }
+        }
 
+        // 5. Chunked bulk materialization (50 rows / 4 queries per chunk)
+        const mat = yield* rematerializeTransactions(db, workspaceId, Array.from(impactedTxIds))
+
+        // 6. Commit sync_cursor & sync_run completion ONLY once all data is safely persisted
+        yield* db.transaction((tx) =>
+          Effect.gen(function* () {
             yield* tx.execute(
               `UPDATE raw_item
                SET status = 'healthy', error_code = NULL, error_message = NULL,
@@ -670,7 +732,6 @@ export const syncItemInternal = (
                WHERE workspace_id = ? AND item_id = ?`,
               [pages.nextCursor, now, now, workspaceId, itemId],
             )
-
             yield* tx.execute(
               `UPDATE sync_run
                SET status = 'succeeded', added_count = ?, modified_count = ?, removed_count = ?,
@@ -687,18 +748,18 @@ export const syncItemInternal = (
                 runId,
               ],
             )
-
-            return {
-              sync_run_id: runId,
-              item_id: itemId,
-              added: pages.added.length,
-              modified: pages.modified.length,
-              removed: pages.removed.length,
-              rules_applied: mat.rulesApplied,
-              cursor: pages.nextCursor,
-            }
           }),
         )
+
+        return {
+          sync_run_id: runId,
+          item_id: itemId,
+          added: pages.added.length,
+          modified: pages.modified.length,
+          removed: pages.removed.length,
+          rules_applied: mat.rulesApplied,
+          cursor: pages.nextCursor,
+        }
       }),
     )
 

@@ -204,65 +204,15 @@ const loadRawTxInputs = (
     return out
   })
 
-const upsertEffectiveTx = (
-  tx: DbExecutor,
-  workspaceId: string,
-  eff: EffectiveTxOutput,
-  now: Date,
-) =>
-  Effect.gen(function* () {
-    yield* tx.execute(
-      `DELETE FROM effective_transaction WHERE workspace_id = ? AND id = ?`,
-      [workspaceId, eff.id],
-    )
-    yield* tx.execute(
-      `INSERT INTO effective_transaction (
-        workspace_id, id, source, account_id, institution_id, date, raw_date,
-        amount_cents, raw_amount_cents, currency, merchant_name, description, raw_name,
-        category, category_top, raw_category, payment_channel, pending,
-        is_transfer, transfer_pair_id, is_excluded, has_splits, has_overlay,
-        recurring_group, tags_json, tags_text, notes, custom_fields_json,
-        provenance_json, applied_rule_ids_json, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        workspaceId,
-        eff.id,
-        eff.source,
-        eff.account_id,
-        eff.institution_id,
-        eff.date,
-        eff.raw_date,
-        eff.amount_cents,
-        eff.raw_amount_cents,
-        eff.currency,
-        eff.merchant_name,
-        eff.description,
-        eff.raw_name,
-        eff.category,
-        eff.category_top,
-        eff.raw_category,
-        eff.payment_channel,
-        eff.pending ? 1 : 0,
-        eff.is_transfer ? 1 : 0,
-        eff.transfer_pair_id,
-        eff.is_excluded ? 1 : 0,
-        eff.has_splits ? 1 : 0,
-        eff.has_overlay ? 1 : 0,
-        eff.recurring_group,
-        JSON.stringify(eff.tags_json),
-        eff.tags_text,
-        eff.notes,
-        eff.custom_fields_json ? JSON.stringify(eff.custom_fields_json) : null,
-        JSON.stringify(eff.provenance_json),
-        JSON.stringify(eff.applied_rule_ids_json),
-        now,
-      ],
-    )
-  })
+const chunkArray = <T>(items: ReadonlyArray<T>, size: number): Array<Array<T>> => {
+  const chunks: Array<Array<T>> = []
+  for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size))
+  return chunks
+}
 
 /**
- * Re-materialize ONLY the specified txIds in O(|txIds|).
- * Deletes effective_transaction & rule_application entries for any txId that no longer has an active raw/manual source.
+ * Re-materialize ONLY the specified txIds in O(|txIds|) using chunked bulk SQL
+ * (4 round-trips per 50 transactions instead of N*3 sequential round-trips).
  */
 export const rematerializeTransactions = (
   tx: DbExecutor,
@@ -274,75 +224,138 @@ export const rematerializeTransactions = (
     if (uniqueIds.length === 0) return { rematerialized: 0, rulesApplied: 0 }
 
     const activeRules = yield* loadActiveRules(tx, workspaceId)
-    const rawMap = yield* loadRawTxInputs(tx, workspaceId, uniqueIds)
-
-    const inSql = placeholders(uniqueIds.length)
-    const overlaysRes = yield* tx.query<{
-      id: string
-      batch_id: string
-      tx_id: string
-      seq: number
-      patch_json: unknown
-    }>(
-      `SELECT id, batch_id, tx_id, seq, patch_json
-       FROM tx_overlay
-       WHERE workspace_id = ? AND active = 1 AND tx_id IN (${inSql})
-       ORDER BY seq ASC, id ASC`,
-      [workspaceId, ...uniqueIds],
-    )
-    const overlaysByTx = new Map<string, Array<ActiveOverlayInput>>()
-    for (const o of overlaysRes.rows) {
-      const list = overlaysByTx.get(o.tx_id) ?? []
-      list.push({
-        id: o.id,
-        batch_id: o.batch_id,
-        seq: toNum(o.seq),
-        patch_json: parseJsonColumn<TxPatch>(o.patch_json, {}),
-      })
-      overlaysByTx.set(o.tx_id, list)
-    }
-
-    const splitsRes = yield* tx.query<{ tx_id: string }>(
-      `SELECT DISTINCT tx_id FROM tx_split
-       WHERE workspace_id = ? AND active = 1 AND tx_id IN (${inSql})`,
-      [workspaceId, ...uniqueIds],
-    )
-    const splitTxSet = new Set(splitsRes.rows.map((r) => r.tx_id))
-
     const now = new Date()
     let rematerialized = 0
     let rulesApplied = 0
 
-    for (const txId of uniqueIds) {
-      const raw = rawMap.get(txId)
-      yield* tx.execute(
-        "DELETE FROM rule_application WHERE workspace_id = ? AND tx_id = ?",
-        [workspaceId, txId],
+    for (const chunk of chunkArray(uniqueIds, 50)) {
+      const rawMap = yield* loadRawTxInputs(tx, workspaceId, chunk)
+      const inSql = placeholders(chunk.length)
+
+      const overlaysRes = yield* tx.query<{
+        id: string
+        batch_id: string
+        tx_id: string
+        seq: number
+        patch_json: unknown
+      }>(
+        `SELECT id, batch_id, tx_id, seq, patch_json
+         FROM tx_overlay
+         WHERE workspace_id = ? AND active = 1 AND tx_id IN (${inSql})
+         ORDER BY seq ASC, id ASC`,
+        [workspaceId, ...chunk],
       )
-      if (!raw) {
-        yield* tx.execute(
-          "DELETE FROM effective_transaction WHERE workspace_id = ? AND id = ?",
-          [workspaceId, txId],
-        )
-        continue
+      const overlaysByTx = new Map<string, Array<ActiveOverlayInput>>()
+      for (const o of overlaysRes.rows) {
+        const list = overlaysByTx.get(o.tx_id) ?? []
+        list.push({
+          id: o.id,
+          batch_id: o.batch_id,
+          seq: toNum(o.seq),
+          patch_json: parseJsonColumn<TxPatch>(o.patch_json, {}),
+        })
+        overlaysByTx.set(o.tx_id, list)
       }
 
-      const eff = materializeTransaction(
-        raw,
-        activeRules,
-        overlaysByTx.get(txId) ?? [],
-        splitTxSet.has(txId),
+      const splitsRes = yield* tx.query<{ tx_id: string }>(
+        `SELECT DISTINCT tx_id FROM tx_split
+         WHERE workspace_id = ? AND active = 1 AND tx_id IN (${inSql})`,
+        [workspaceId, ...chunk],
       )
-      yield* upsertEffectiveTx(tx, workspaceId, eff, now)
-      rematerialized++
+      const splitTxSet = new Set(splitsRes.rows.map((r) => r.tx_id))
 
-      for (const ruleId of eff.applied_rule_ids_json) {
-        yield* tx.execute(
-          `INSERT INTO rule_application (workspace_id, rule_id, tx_id, applied_at)
-           VALUES (?, ?, ?, ?)`,
-          [workspaceId, ruleId, txId, now],
+      const effRows: Array<EffectiveTxOutput> = []
+      const ruleApps: Array<{ ruleId: string; txId: string }> = []
+
+      for (const txId of chunk) {
+        const raw = rawMap.get(txId)
+        if (!raw) continue
+        const eff = materializeTransaction(
+          raw,
+          activeRules,
+          overlaysByTx.get(txId) ?? [],
+          splitTxSet.has(txId),
         )
-        rulesApplied++
+        effRows.push(eff)
+        for (const ruleId of eff.applied_rule_ids_json) {
+          ruleApps.push({ ruleId, txId })
+        }
+      }
+
+      yield* tx.execute(
+        `DELETE FROM rule_application WHERE workspace_id = ? AND tx_id IN (${inSql})`,
+        [workspaceId, ...chunk],
+      )
+      yield* tx.execute(
+        `DELETE FROM effective_transaction WHERE workspace_id = ? AND id IN (${inSql})`,
+        [workspaceId, ...chunk],
+      )
+
+      if (effRows.length > 0) {
+        const rowPlaceholders = effRows
+          .map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+          .join(", ")
+        const insertParams: Array<SqlParam> = []
+        for (const eff of effRows) {
+          insertParams.push(
+            workspaceId,
+            eff.id,
+            eff.source,
+            eff.account_id,
+            eff.institution_id,
+            eff.date,
+            eff.raw_date,
+            eff.amount_cents,
+            eff.raw_amount_cents,
+            eff.currency,
+            eff.merchant_name,
+            eff.description,
+            eff.raw_name,
+            eff.category,
+            eff.category_top,
+            eff.raw_category,
+            eff.payment_channel,
+            eff.pending ? 1 : 0,
+            eff.is_transfer ? 1 : 0,
+            eff.transfer_pair_id,
+            eff.is_excluded ? 1 : 0,
+            eff.has_splits ? 1 : 0,
+            eff.has_overlay ? 1 : 0,
+            eff.recurring_group,
+            JSON.stringify(eff.tags_json),
+            eff.tags_text,
+            eff.notes,
+            eff.custom_fields_json ? JSON.stringify(eff.custom_fields_json) : null,
+            JSON.stringify(eff.provenance_json),
+            JSON.stringify(eff.applied_rule_ids_json),
+            now,
+          )
+        }
+        yield* tx.execute(
+          `INSERT INTO effective_transaction (
+            workspace_id, id, source, account_id, institution_id, date, raw_date,
+            amount_cents, raw_amount_cents, currency, merchant_name, description, raw_name,
+            category, category_top, raw_category, payment_channel, pending,
+            is_transfer, transfer_pair_id, is_excluded, has_splits, has_overlay,
+            recurring_group, tags_json, tags_text, notes, custom_fields_json,
+            provenance_json, applied_rule_ids_json, updated_at
+          ) VALUES ${rowPlaceholders}`,
+          insertParams,
+        )
+        rematerialized += effRows.length
+      }
+
+      if (ruleApps.length > 0) {
+        for (const appChunk of chunkArray(ruleApps, 100)) {
+          const appPlaceholders = appChunk.map(() => "(?, ?, ?, ?)").join(", ")
+          const appParams: Array<SqlParam> = []
+          for (const a of appChunk) appParams.push(workspaceId, a.ruleId, a.txId, now)
+          yield* tx.execute(
+            `INSERT INTO rule_application (workspace_id, rule_id, tx_id, applied_at) VALUES ${appPlaceholders}`,
+            appParams,
+          )
+          rulesApplied += appChunk.length
+        }
       }
     }
 
