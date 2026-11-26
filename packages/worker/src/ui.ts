@@ -35,12 +35,13 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
 .muted { color: var(--muted); font-size: 12px; }
 `
 
-const layout = (title: string, body: string): string => `<!doctype html>
+const layout = (title: string, body: string, markdownHref?: string): string => `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>${escapeHtml(title)} — Radiant</title>
+  ${markdownHref ? `<link rel="alternate" type="text/markdown" href="${escapeHtml(markdownHref)}" />` : ""}
   <style>${BASE_CSS}</style>
 </head>
 <body>
@@ -68,14 +69,17 @@ export const renderLandingPage = (baseUrl: string, basePath = ""): string =>
       <p>Create workspaces, invite teammates or family, connect bank accounts via Plaid Link, apply non-destructive overlays & rules with instant undo, and run structured aggregations or read-only SQL from your agent.</p>
       <div class="inline">
         <a class="btn primary" href="${escapeHtml(basePath)}/auth/login">Sign in to continue</a>
+        <a class="btn" href="${escapeHtml(basePath)}/index.md">Agent docs (Markdown)</a>
       </div>
     </div>
     <div class="card">
-      <h3>MCP Endpoint</h3>
+      <h3>Use with an Agent</h3>
+      <p>Paste <code>${escapeHtml(baseUrl)}</code> into your agent — it receives a Markdown onboarding guide with Device Flow sign-in and 1-click bank connect links, or add the MCP server directly:</p>
       <pre>${escapeHtml(baseUrl)}/mcp</pre>
       <p class="muted">Supports OAuth 2.1 with dynamic client registration and PKCE (OpenCode, Claude, Cursor).</p>
     </div>
   `,
+    `${baseUrl.replace(/\/+$/, "")}/index.md`,
   )
 
 export const renderEmptyWorkspacesPage = (email: string, basePath = ""): string =>
@@ -378,6 +382,8 @@ export const renderWorkspaceDashboard = (input: {
 export const renderConnectHandoffPage = (input: {
   readonly basePath: string
   readonly workspaceId: string
+  readonly workspaceName: string
+  readonly workspaceSlug: string
   readonly connectToken: string
   readonly mode: "new" | "update"
   readonly itemId: string | null
@@ -387,44 +393,73 @@ export const renderConnectHandoffPage = (input: {
     `
     <div class="card stack">
       <h1>${input.mode === "update" ? "Reconnect Bank Account" : "Connect Bank Account"}</h1>
-      <p>Your agent requested a Plaid Link session for workspace <code>${escapeHtml(input.workspaceId)}</code>.</p>
+      <p>Connecting a bank account to workspace <strong>${escapeHtml(input.workspaceName)}</strong> (<code>${escapeHtml(input.workspaceId)}</code>).</p>
       <div class="inline">
-        <button id="launch" class="primary" type="button">Launch Plaid Link</button>
-        <span id="status" class="muted"></span>
+        <button id="launch" class="primary" type="button">${input.mode === "update" ? "Reconnect with Plaid" : "Connect bank with Plaid"}</button>
+        <a class="btn" href="${escapeHtml(input.basePath)}/w/${escapeHtml(input.workspaceSlug)}">Open workspace</a>
       </div>
+      <div id="status" class="muted">Opening Plaid Link…</div>
+      <ul id="connected-list" style="margin:0;padding-left:18px"></ul>
     </div>
     <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
     <script>
+      const BASE = ${JSON.stringify(input.basePath)};
+      const WS = ${JSON.stringify(input.workspaceId)};
+      const MODE = ${JSON.stringify(input.mode)};
+      const ITEM_ID = ${JSON.stringify(input.itemId)};
+      const CONNECT_TOKEN = ${JSON.stringify(input.connectToken)};
+      let linkedAny = false;
+
       async function launch() {
+        const btn = document.getElementById("launch");
         const status = document.getElementById("status");
-        status.textContent = "Creating link token...";
+        btn.disabled = true;
+        status.textContent = "Opening Plaid Link…";
         try {
-          const res = await fetch(${JSON.stringify(input.basePath)} + "/api/v1/workspaces/" + ${JSON.stringify(input.workspaceId)} + "/plaid/link-token", {
+          const res = await fetch(BASE + "/api/v1/workspaces/" + WS + "/plaid/link-token", {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ mode: ${JSON.stringify(input.mode)}, item_id: ${JSON.stringify(input.itemId)} }),
+            body: JSON.stringify({ mode: linkedAny ? "new" : MODE, item_id: linkedAny ? null : ITEM_ID }),
           });
           const data = await res.json();
-          if (!res.ok) throw new Error(data.error || "Failed to create link token");
+          if (!res.ok) throw new Error(data.message || data.error || "Failed to create link token");
           const handler = Plaid.create({
             token: data.link_token,
             onSuccess: async (public_token) => {
-              status.textContent = "Syncing accounts and transactions...";
-              const ex = await fetch(${JSON.stringify(input.basePath)} + "/api/v1/workspaces/" + ${JSON.stringify(input.workspaceId)} + "/plaid/exchange", {
-                method: "POST",
-                headers: { "content-type": "application/json" },
-                body: JSON.stringify({ public_token, connect_token: ${JSON.stringify(input.connectToken)} }),
-              });
-              const exData = await ex.json();
-              if (!ex.ok) throw new Error(exData.error || "Exchange failed");
-              status.textContent = "Connected! Synced " + (exData.sync?.added ?? 0) + " transactions. You can close this tab.";
+              status.textContent = "Syncing accounts and transactions…";
+              try {
+                const ex = await fetch(BASE + "/api/v1/workspaces/" + WS + "/plaid/exchange", {
+                  method: "POST",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify({ public_token, connect_token: CONNECT_TOKEN }),
+                });
+                const exData = await ex.json();
+                if (!ex.ok) throw new Error(exData.message || exData.error || "Exchange failed");
+                linkedAny = true;
+                const li = document.createElement("li");
+                li.textContent = (exData.institution_name || "Bank") + " — " + (exData.accounts_count ?? 0) + " account(s), " + (exData.sync?.added ?? 0) + " transaction(s) synced";
+                document.getElementById("connected-list").appendChild(li);
+                status.textContent = "Connected! You can connect another bank below or return to your agent.";
+                btn.textContent = "Connect another bank";
+              } catch (err) {
+                status.textContent = "Sync error: " + err.message;
+              } finally {
+                btn.disabled = false;
+              }
             },
-            onExit: () => { status.textContent = "Plaid Link closed."; },
+            onExit: () => {
+              btn.disabled = false;
+              if (!linkedAny) status.textContent = "Plaid Link closed. Click the button above to try again.";
+            },
           });
           handler.open();
-        } catch (e) { status.textContent = "Error: " + e.message; }
+        } catch (e) {
+          btn.disabled = false;
+          status.textContent = "Error: " + e.message;
+        }
       }
       document.getElementById("launch").addEventListener("click", launch);
+      window.addEventListener("load", () => { launch(); });
     </script>
   `,
   )
@@ -461,14 +496,15 @@ export const renderDeviceApprovePage = (input: {
   readonly basePath: string
   readonly email: string
   readonly code: string
+  readonly clientName?: string | null
   readonly message?: string
 }): string =>
   layout(
     "Approve agent sign-in",
     `
     <div class="card stack">
-      <h1>Approve Agent Sign-In</h1>
-      <p>Signed in as <strong>${escapeHtml(input.email)}</strong>. Verify the code shown by your agent before approving.</p>
+      <h1>Approve ${escapeHtml(input.clientName || "Agent")} Sign-In</h1>
+      <p>Signed in as <strong>${escapeHtml(input.email)}</strong>. ${input.clientName ? `<strong>${escapeHtml(input.clientName)}</strong> wants to access your Radiant workspaces.` : ""} Verify the code shown by your agent before approving.</p>
       ${input.message ? `<p style="color:var(--fg)"><strong>${escapeHtml(input.message)}</strong></p>` : ""}
       <form class="inline" method="POST" action="${escapeHtml(input.basePath)}/device">
         <input name="code" value="${escapeHtml(input.code)}" placeholder="BCDF-GHJK" required />

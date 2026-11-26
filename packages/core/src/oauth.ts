@@ -692,6 +692,25 @@ export const startDeviceFlow = (clientName: string, origin: string) =>
     }
   })
 
+export const lookupDeviceFlow = (userCode: string) =>
+  Effect.gen(function* () {
+    const clean = userCode.trim().toUpperCase()
+    if (!clean) return null
+    const db = yield* Database
+    const res = yield* db.query<{
+      user_code: string
+      client_name: string
+      status: string
+      expires_at: string
+    }>(
+      "SELECT user_code, client_name, status, expires_at FROM device_code WHERE user_code = ? LIMIT 1",
+      [clean],
+    )
+    const row = res.rows[0]
+    if (!row || row.status !== "pending" || new Date(row.expires_at).getTime() < Date.now()) return null
+    return { user_code: row.user_code, client_name: row.client_name }
+  })
+
 export const decideDeviceFlow = (userCode: string, userId: string, approve: boolean) =>
   Effect.gen(function* () {
     const db = yield* Database

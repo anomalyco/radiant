@@ -326,9 +326,10 @@ export const exchangePublicToken = (
         )
 
         if (connectHash) {
+          // Keep connect_token valid for its 15-min TTL so the user can link multiple banks in one session
           yield* tx.execute(
-            "UPDATE connect_token SET consumed_at = ? WHERE token_hash = ? AND consumed_at IS NULL",
-            [now, connectHash],
+            "UPDATE connect_token SET consumed_at = NULL WHERE token_hash = ? AND expires_at > ?",
+            [connectHash, now],
           )
         }
       }),

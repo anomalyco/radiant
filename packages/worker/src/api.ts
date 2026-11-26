@@ -59,6 +59,7 @@ import {
   type TransactionQueryInput,
 } from "@radiant/core"
 import type { TxPatch, WorkspaceRole } from "@radiant/database/schema"
+import { markdownResponse, prefersMarkdown, renderAgentMarkdown } from "./agent-doc"
 import { htmlResponse, jsonResponse, type AppServices, type Env, type RouteContext } from "./env"
 import { resolveBrowserActor } from "./oauth-routes"
 import {
@@ -123,13 +124,20 @@ export const handleAppRoutes = (
       return jsonResponse({ received: true, action: job.action })
     }
 
-    // ── Minimal SSR Web UI Routes ───────────────────────────────────────────
+    // ── Agent-First Markdown & Minimal SSR Web UI Routes ────────────────────
+
+    if (method === "GET" && (path === "/index.md" || path === "/llms.txt")) {
+      return markdownResponse(renderAgentMarkdown(baseUrl))
+    }
 
     if (method === "GET" && path === "/") {
+      if (prefersMarkdown(request.headers.get("accept"))) {
+        return markdownResponse(renderAgentMarkdown(baseUrl))
+      }
       const actor = yield* resolveBrowserActor(request)
-      if (!actor) return htmlResponse(renderLandingPage(baseUrl, basePath))
+      if (!actor) return htmlResponse(renderLandingPage(baseUrl, basePath), 200, { vary: "Accept" })
       const workspaces = yield* listWorkspaces(actor)
-      if (workspaces.length === 0) return htmlResponse(renderEmptyWorkspacesPage(actor.email, basePath))
+      if (workspaces.length === 0) return htmlResponse(renderEmptyWorkspacesPage(actor.email, basePath), 200, { vary: "Accept" })
       return Response.redirect(`${baseUrl}/w/${workspaces[0]!.slug}`, 302)
     }
 
@@ -187,11 +195,13 @@ export const handleAppRoutes = (
         return Response.redirect(`${baseUrl}/auth/login?return_to=${encodeURIComponent(url.pathname)}`, 302)
       }
       const handoff = yield* resolveConnectHandoffToken(rawToken)
-      yield* assertWorkspaceAccess(actor, handoff.workspace_id, "admin")
+      const ws = yield* assertWorkspaceAccess(actor, handoff.workspace_id, "admin")
       return htmlResponse(
         renderConnectHandoffPage({
           basePath,
-          workspaceId: handoff.workspace_id,
+          workspaceId: ws.id,
+          workspaceName: ws.name,
+          workspaceSlug: ws.slug,
           connectToken: rawToken,
           mode: handoff.mode,
           itemId: handoff.item_id,

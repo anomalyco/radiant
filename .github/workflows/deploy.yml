@@ -121,6 +121,11 @@ jobs:
     steps:
       - name: Verify live health
         run: |
-          status=$(curl --silent --max-time 20 --output /dev/null --write-out '%{http_code}' "$BASE/health")
-          echo "$BASE/health -> $status"
-          test "$status" = 200
+          status=""
+          for _ in 1 2 3 4 5 6; do
+            status=$(curl --silent --max-time 20 --output /dev/null --write-out '%{http_code}' "$BASE/health" || true)
+            echo "$BASE/health -> $status"
+            [ "$status" = 200 ] && exit 0
+            sleep 5
+          done
+          exit 1

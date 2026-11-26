@@ -6,6 +6,7 @@ import {
   exchangeAuthorizationCode,
   getOAuthClient,
   issueAuthorizationCode,
+  lookupDeviceFlow,
   pollDeviceFlow,
   refreshOAuthGrant,
   registerOAuthClient,
@@ -311,8 +312,15 @@ export const handleOAuthRoutes = (
           headers: { location: `${basePath}/auth/login?return_to=${encodeURIComponent(url.pathname + url.search)}` },
         })
       }
+      const code = url.searchParams.get("code") ?? ""
+      const pending = code ? yield* lookupDeviceFlow(code) : null
       return htmlResponse(
-        renderDeviceApprovePage({ basePath, email: actor.email, code: url.searchParams.get("code") ?? "" }),
+        renderDeviceApprovePage({
+          basePath,
+          email: actor.email,
+          code,
+          clientName: pending?.client_name ?? null,
+        }),
       )
     }
 
