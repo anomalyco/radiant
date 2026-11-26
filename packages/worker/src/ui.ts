@@ -128,7 +128,7 @@ export const renderWorkspaceDashboard = (input: {
   const bp = input.basePath
   const mcpUrl = `${input.baseUrl.replace(/\/$/, "")}/mcp`
   const opencodeSnippet = JSON.stringify(
-    { mcp: { radiant: { type: "remote", url: mcpUrl } } },
+    { mcp: { servers: { radiant: { type: "remote", url: mcpUrl } } } },
     null,
     2,
   )
