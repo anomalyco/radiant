@@ -744,6 +744,7 @@ export const setAccountOverlay = (
     readonly nickname?: string | null
     readonly account_group?: string | null
     readonly owner_label?: string | null
+    readonly is_active?: boolean | null
     readonly is_hidden?: boolean | null
     readonly is_excluded_from_net_worth?: boolean | null
     readonly notes?: string | null
@@ -766,6 +767,11 @@ export const setAccountOverlay = (
           return yield* new NotFoundError({ entity: "account", id: input.account_id })
         }
 
+        const resolvedHidden =
+          input.is_active !== undefined && input.is_active !== null
+            ? !input.is_active
+            : input.is_hidden
+
         yield* tx.execute(
           `INSERT INTO account_overlay
             (workspace_id, id, batch_id, account_id, seq, nickname, account_group, owner_label,
@@ -780,7 +786,7 @@ export const setAccountOverlay = (
             input.nickname ?? null,
             input.account_group ?? null,
             input.owner_label ?? null,
-            input.is_hidden === undefined || input.is_hidden === null ? null : input.is_hidden ? 1 : 0,
+            resolvedHidden === undefined || resolvedHidden === null ? null : resolvedHidden ? 1 : 0,
             input.is_excluded_from_net_worth === undefined || input.is_excluded_from_net_worth === null
               ? null
               : input.is_excluded_from_net_worth

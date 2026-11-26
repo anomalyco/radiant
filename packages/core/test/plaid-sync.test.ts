@@ -2,15 +2,20 @@ import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
 import { exportJWK, generateKeyPair, SignJWT } from "jose"
 import {
+  aggregateTransactions,
   applyTransactionOverlay,
   balancesSummary,
   createRule,
   createWorkspace,
   exchangePublicToken,
+  executeWorkspaceSql,
   getTransactionDetail,
+  listAccounts,
   queryTransactions,
+  setAccountOverlay,
   sha256Hex,
   triggerPlaidSync,
+  undoOverlayBatch,
   upsertOidcUser,
   verifyPlaidWebhook,
   type Actor,
@@ -213,5 +218,113 @@ describe("Plaid Sync Engine — cursor pagination, mutation retry, pending->post
       Effect.provide(Effect.result(verifyPlaidWebhook(body + " ", jwt)), layer),
     )
     expect(tampered._tag).toBe("Failure")
+  })
+
+  test("deactivating an account omits it from accounts, balances, queries, aggregates, and SQL while still syncing raw data and supporting undo", async () => {
+    const state: MockPlaidState = {
+      institutionName: "Robinhood",
+      itemId: "item_rh_active_test",
+      accessToken: "access-sandbox-rh",
+      webhookKeys: {},
+      accounts: [
+        {
+          account_id: "rh_chk",
+          name: "Checking",
+          official_name: "Robinhood Checking",
+          mask: "1663",
+          type: "depository",
+          subtype: "checking",
+          balances: { current: 5000, available: 5000, limit: null, iso_currency_code: "USD" },
+        },
+        {
+          account_id: "rh_cc",
+          name: "Credit Card",
+          official_name: "Robinhood Credit Card",
+          mask: "9978",
+          type: "credit",
+          subtype: "credit card",
+          balances: { current: 250, available: 9750, limit: 10000, iso_currency_code: "USD" },
+        },
+      ],
+      syncPages: [
+        {
+          added: [
+            makePlaidTx({ transaction_id: "t_chk_1", account_id: "rh_chk", amount: 100, name: "RENT" }),
+            makePlaidTx({ transaction_id: "t_cc_1", account_id: "rh_cc", amount: 25, name: "COFFEE" }),
+          ],
+          modified: [],
+          removed: [],
+          next_cursor: "c1",
+          has_more: false,
+        },
+        {
+          added: [
+            makePlaidTx({ transaction_id: "t_chk_2", account_id: "rh_chk", amount: 50, name: "UTILITY" }),
+          ],
+          modified: [],
+          removed: [],
+          next_cursor: "c2",
+          has_more: false,
+        },
+      ],
+    }
+
+    const layer = makeTestLayer(state)
+    await Effect.runPromise(
+      Effect.provide(
+        Effect.gen(function* () {
+          const u = yield* upsertOidcUser({ issuer: "iss", sub: "act1", email: "dax@anoma.ly", name: "Dax" })
+          const actor: Actor = { type: "user", userId: u.id, email: u.email, name: u.name, clientName: "web" }
+          const ws = yield* createWorkspace(actor, { name: "Personal" })
+          yield* exchangePublicToken(actor, ws.id, { public_token: "pub" })
+
+          const allAccs = yield* listAccounts(actor, ws.id, { include_inactive: true })
+          const chk = allAccs.find((a) => a.mask === "1663")!
+          const cc = allAccs.find((a) => a.mask === "9978")!
+
+          // Deactivate Checking
+          const batch = yield* setAccountOverlay(actor, ws.id, {
+            account_id: chk.id,
+            is_active: false,
+            reason: "Focus only on credit card",
+          })
+
+          // Trigger another sync: Checking STILL syncs new transactions in the background!
+          yield* triggerPlaidSync(actor, ws.id, { item_id: state.itemId })
+
+          // Active accounts, balances, query, aggregate, and SQL views all omit Checking
+          const activeAccs = yield* listAccounts(actor, ws.id)
+          expect(activeAccs.map((a) => a.id)).toEqual([cc.id])
+
+          const bal = yield* balancesSummary(actor, ws.id)
+          expect(bal.accounts.map((a) => a.id)).toEqual([cc.id])
+          expect(bal.by_currency.USD!.net_worth_cents).toBe(-25000)
+
+          const q = yield* queryTransactions(actor, ws.id)
+          expect(q.items.length).toBe(1)
+          expect(q.items[0]!.raw_name).toBe("COFFEE")
+
+          const agg = yield* aggregateTransactions(actor, ws.id)
+          expect(agg.totals.count).toBe(1)
+          expect(agg.totals.sum_cents).toBe(-2500)
+
+          const sqlEff = yield* executeWorkspaceSql(actor, ws.id, { sql: "SELECT COUNT(*) AS n FROM transactions" })
+          expect(Number(sqlEff.rows[0]!.n)).toBe(1)
+
+          const sqlAcc = yield* executeWorkspaceSql(actor, ws.id, { sql: "SELECT COUNT(*) AS n FROM accounts" })
+          expect(Number(sqlAcc.rows[0]!.n)).toBe(1)
+
+          // Meanwhile raw_transactions STILL has all 3 synced rows (including t_chk_2 synced while inactive!)
+          const sqlRaw = yield* executeWorkspaceSql(actor, ws.id, { sql: "SELECT COUNT(*) AS n FROM raw_transactions" })
+          expect(Number(sqlRaw.rows[0]!.n)).toBe(3)
+
+          // Undo deactivation -> Checking and both its transactions reappear immediately!
+          yield* undoOverlayBatch(actor, ws.id, batch.batch_id)
+          const sqlAfterUndo = yield* executeWorkspaceSql(actor, ws.id, { sql: "SELECT COUNT(*) AS n FROM transactions" })
+          expect(Number(sqlAfterUndo.rows[0]!.n)).toBe(3)
+        }),
+        layer,
+      ),
+    )
   })
 })

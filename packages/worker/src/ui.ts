@@ -169,15 +169,17 @@ export const renderWorkspaceDashboard = (input: {
     input.accounts.length === 0
       ? `<p class="muted">Accounts appear here once synced.</p>`
       : `<table>
-          <thead><tr><th>Account</th><th>Institution</th><th>Type</th><th class="num">Balance</th></tr></thead>
+          <thead><tr><th>Account</th><th>Institution</th><th>Type</th><th>Status</th><th class="num">Balance</th><th></th></tr></thead>
           <tbody>
             ${input.accounts
               .map(
-                (a) => `<tr>
+                (a) => `<tr style="${a.is_active ? "" : "opacity:0.55"}">
                   <td>${escapeHtml(a.nickname ?? a.name)}${a.mask ? ` <span class="muted">••${escapeHtml(a.mask)}</span>` : ""}</td>
                   <td class="muted">${escapeHtml(a.institution_name)}</td>
                   <td class="muted">${escapeHtml(a.type)}${a.subtype ? `/${escapeHtml(a.subtype)}` : ""}</td>
+                  <td><span class="badge ${a.is_active ? "ok" : ""}">${a.is_active ? "active" : "inactive"}</span></td>
                   <td class="num">${escapeHtml(fmtMoney(a.current_cents, a.currency))}</td>
+                  <td class="num"><button type="button" onclick="toggleAccount('${escapeHtml(a.id)}',${a.is_active ? "false" : "true"})">${a.is_active ? "Deactivate" : "Activate"}</button></td>
                 </tr>`,
               )
               .join("")}
@@ -341,6 +343,15 @@ export const renderWorkspaceDashboard = (input: {
         if (!confirm("Disconnect this bank institution?")) return;
         try {
           await api("/api/v1/workspaces/" + WS + "/plaid/items/" + encodeURIComponent(itemId), { method: "DELETE" });
+          location.reload();
+        } catch (err) { alert(err.message); }
+      }
+      async function toggleAccount(accountId, nextActive) {
+        try {
+          await api("/api/v1/workspaces/" + WS + "/accounts/" + encodeURIComponent(accountId) + "/overlay", {
+            method: "POST",
+            body: JSON.stringify({ is_active: nextActive, reason: nextActive ? "Activated account" : "Deactivated account" }),
+          });
           location.reload();
         } catch (err) { alert(err.message); }
       }

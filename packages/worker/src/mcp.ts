@@ -99,6 +99,7 @@ const TX_FILTER_PROPS = {
   pending: { oneOf: [{ type: "boolean" }, { type: "string", enum: ["all"] }] },
   include_transfers: { type: "boolean" },
   include_excluded: { type: "boolean" },
+  include_inactive_accounts: { type: "boolean", description: "Include transactions from deactivated accounts (default false)" },
   has_overlay: { type: "boolean" },
   rule_id: { type: "string" },
   batch_id: { type: "string" },
@@ -229,19 +230,20 @@ export const MCP_TOOLS: ReadonlyArray<ToolDef> = [
   // Accounts & Balances
   {
     name: "account_list",
-    description: "List accounts with current balances and active account overlays.",
-    inputSchema: { type: "object", properties: { ...WS_PROP, include_hidden: { type: "boolean" } } },
+    description: "List active accounts with current balances and overlays (pass include_inactive: true to include deactivated accounts).",
+    inputSchema: { type: "object", properties: { ...WS_PROP, include_inactive: { type: "boolean" }, include_hidden: { type: "boolean" } } },
   },
   { name: "account_get", description: "Get one account by ID.", inputSchema: { type: "object", required: ["account_id"], properties: { ...WS_PROP, account_id: { type: "string" } } } },
   {
     name: "account_overlay_set",
-    description: "Apply an undoable overlay to an account (nickname, group, owner_label, hidden, exclude from net worth, notes).",
+    description: "Apply an undoable overlay to an account (toggle is_active to include/omit from queries while still syncing, nickname, group, owner_label, exclude from net worth, notes).",
     inputSchema: {
       type: "object",
       required: ["account_id"],
       properties: {
         ...WS_PROP,
         account_id: { type: "string" },
+        is_active: { type: ["boolean", "null"], description: "Set false to omit this account and its transactions from queries, aggregates, balances, and SQL views while continuing to sync it." },
         nickname: { type: ["string", "null"] },
         account_group: { type: ["string", "null"] },
         owner_label: { type: ["string", "null"] },
@@ -626,13 +628,14 @@ const dispatchTool = (
 
       case "account_list":
         return yield* listAccounts(actor, yield* resolveWs("viewer"), {
-          include_hidden: Boolean(args.include_hidden),
+          include_inactive: Boolean(args.include_inactive || args.include_hidden),
         })
       case "account_get":
         return yield* getAccount(actor, yield* resolveWs("viewer"), String(args.account_id ?? ""))
       case "account_overlay_set":
         return yield* setAccountOverlay(actor, yield* resolveWs("member"), {
           account_id: String(args.account_id ?? ""),
+          is_active: args.is_active as boolean | null | undefined,
           nickname: args.nickname as string | null | undefined,
           account_group: args.account_group as string | null | undefined,
           owner_label: args.owner_label as string | null | undefined,

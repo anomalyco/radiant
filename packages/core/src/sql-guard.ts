@@ -60,6 +60,7 @@ export const LOGICAL_VIEWS: Readonly<Record<string, LogicalViewSpec>> = {
         et.custom_fields_json AS custom_fields, et.provenance_json AS provenance
       FROM effective_transaction et
       WHERE et.workspace_id = ? AND et.has_splits = 0
+        AND (et.account_id IS NULL OR COALESCE((SELECT ao.is_hidden FROM account_overlay ao WHERE ao.workspace_id = et.workspace_id AND ao.account_id = et.account_id AND ao.active = 1 AND ao.is_hidden IS NOT NULL ORDER BY ao.seq DESC, ao.id DESC LIMIT 1), 0) = 0)
       UNION ALL
       SELECT
         sp.id AS id, et.id AS parent_tx_id, 1 AS is_split_line, et.source AS source,
@@ -79,6 +80,7 @@ export const LOGICAL_VIEWS: Readonly<Record<string, LogicalViewSpec>> = {
       FROM tx_split sp
       INNER JOIN effective_transaction et ON et.workspace_id = sp.workspace_id AND et.id = sp.tx_id
       WHERE sp.workspace_id = ? AND sp.active = 1
+        AND (et.account_id IS NULL OR COALESCE((SELECT ao.is_hidden FROM account_overlay ao WHERE ao.workspace_id = et.workspace_id AND ao.account_id = et.account_id AND ao.active = 1 AND ao.is_hidden IS NOT NULL ORDER BY ao.seq DESC, ao.id DESC LIMIT 1), 0) = 0)
     )`,
     workspaceParamCount: 2,
   },
@@ -129,8 +131,9 @@ export const LOGICAL_VIEWS: Readonly<Record<string, LogicalViewSpec>> = {
         custom_fields_json AS custom_fields,
         provenance_json AS provenance,
         applied_rule_ids_json AS applied_rule_ids
-      FROM effective_transaction
-      WHERE workspace_id = ?
+      FROM effective_transaction et
+      WHERE et.workspace_id = ?
+        AND (et.account_id IS NULL OR COALESCE((SELECT ao.is_hidden FROM account_overlay ao WHERE ao.workspace_id = et.workspace_id AND ao.account_id = et.account_id AND ao.active = 1 AND ao.is_hidden IS NOT NULL ORDER BY ao.seq DESC, ao.id DESC LIMIT 1), 0) = 0)
     )`,
     workspaceParamCount: 1,
   },
@@ -213,10 +216,11 @@ export const LOGICAL_VIEWS: Readonly<Record<string, LogicalViewSpec>> = {
       { name: "removed_at", type: "timestamp" },
     ],
     derivedSql: `(
-      SELECT id, item_id, institution_id, institution_name, name, official_name,
-        mask, type, subtype, currency, current_cents, available_cents, limit_cents, removed_at
-      FROM raw_account
-      WHERE workspace_id = ?
+      SELECT ra.id, ra.item_id, ra.institution_id, ra.institution_name, ra.name, ra.official_name,
+        ra.mask, ra.type, ra.subtype, ra.currency, ra.current_cents, ra.available_cents, ra.limit_cents, ra.removed_at
+      FROM raw_account ra
+      WHERE ra.workspace_id = ? AND ra.removed_at IS NULL
+        AND COALESCE((SELECT ao.is_hidden FROM account_overlay ao WHERE ao.workspace_id = ra.workspace_id AND ao.account_id = ra.id AND ao.active = 1 AND ao.is_hidden IS NOT NULL ORDER BY ao.seq DESC, ao.id DESC LIMIT 1), 0) = 0
     )`,
     workspaceParamCount: 1,
   },
@@ -233,9 +237,10 @@ export const LOGICAL_VIEWS: Readonly<Record<string, LogicalViewSpec>> = {
       { name: "limit_cents", type: "bigint" },
     ],
     derivedSql: `(
-      SELECT id, account_id, captured_at, currency, current_cents, available_cents, limit_cents
-      FROM raw_balance_snapshot
-      WHERE workspace_id = ?
+      SELECT bs.id, bs.account_id, bs.captured_at, bs.currency, bs.current_cents, bs.available_cents, bs.limit_cents
+      FROM raw_balance_snapshot bs
+      WHERE bs.workspace_id = ?
+        AND COALESCE((SELECT ao.is_hidden FROM account_overlay ao WHERE ao.workspace_id = bs.workspace_id AND ao.account_id = bs.account_id AND ao.active = 1 AND ao.is_hidden IS NOT NULL ORDER BY ao.seq DESC, ao.id DESC LIMIT 1), 0) = 0
     )`,
     workspaceParamCount: 1,
   },

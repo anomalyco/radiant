@@ -162,7 +162,7 @@ export const handleAppRoutes = (
       const ws = yield* assertWorkspaceAccess(actor, slug, "viewer")
       const [items, accounts, members, batches] = yield* Effect.all([
         listPlaidItems(actor, ws.id),
-        listAccounts(actor, ws.id),
+        listAccounts(actor, ws.id, { include_inactive: true }),
         listMembers(actor, ws.id),
         listOverlayBatches(actor, ws.id, { limit: 25 }),
       ])
@@ -389,7 +389,8 @@ export const handleAppRoutes = (
 
     // Accounts & Balances
     if (sub === "/accounts" && method === "GET") {
-      return jsonResponse({ accounts: yield* listAccounts(actor, wsParam) })
+      const includeInactive = url.searchParams.get("include_inactive") === "1" || url.searchParams.get("include_hidden") === "1"
+      return jsonResponse({ accounts: yield* listAccounts(actor, wsParam, { include_inactive: includeInactive }) })
     }
     const accOvMatch = /^\/accounts\/([^/]+)\/overlay$/.exec(sub)
     if (accOvMatch && method === "POST") {

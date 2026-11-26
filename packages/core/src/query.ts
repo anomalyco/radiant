@@ -30,6 +30,7 @@ export interface AccountView {
   readonly nickname: string | null
   readonly account_group: string | null
   readonly owner_label: string | null
+  readonly is_active: boolean
   readonly is_hidden: boolean
   readonly is_excluded_from_net_worth: boolean
   readonly notes: string | null
@@ -38,7 +39,7 @@ export interface AccountView {
 export const listAccounts = (
   actor: Actor,
   workspaceId: string,
-  options?: { readonly include_hidden?: boolean },
+  options?: { readonly include_hidden?: boolean; readonly include_inactive?: boolean },
 ) =>
   Effect.gen(function* () {
     const ws = yield* assertWorkspaceAccess(actor, workspaceId, "viewer")
@@ -116,13 +117,15 @@ export const listAccounts = (
         nickname: ov?.nickname ?? null,
         account_group: ov?.account_group ?? null,
         owner_label: ov?.owner_label ?? null,
+        is_active: !(ov?.is_hidden ?? false),
         is_hidden: ov?.is_hidden ?? false,
         is_excluded_from_net_worth: ov?.is_excluded_from_net_worth ?? false,
         notes: ov?.notes ?? null,
       }
     })
 
-    return options?.include_hidden ? views : views.filter((v) => !v.is_hidden)
+    const includeInactive = options?.include_inactive || options?.include_hidden
+    return includeInactive ? views : views.filter((v) => v.is_active)
   })
 
 export const getAccount = (actor: Actor, workspaceId: string, accountId: string) =>
@@ -240,9 +243,10 @@ export const balancesHistory = (
 
     // Keep latest snapshot per (bucket, account_id)
     const buckets = new Map<string, Map<string, number>>()
+    const hasExplicitAccounts = Boolean(input?.account_ids && input.account_ids.length > 0)
     for (const row of res.rows) {
       const acc = accMap.get(row.account_id)
-      if (acc?.is_excluded_from_net_worth) continue
+      if (!hasExplicitAccounts && acc && (!acc.is_active || acc.is_excluded_from_net_worth)) continue
       const bk = bucketKey(row.captured_at)
       const perAcc = buckets.get(bk) ?? new Map<string, number>()
       const bal = toNullableNum(row.current_cents) ?? 0
@@ -293,6 +297,7 @@ export interface TransactionFilter {
   readonly pending?: boolean | "all"
   readonly include_transfers?: boolean
   readonly include_excluded?: boolean
+  readonly include_inactive_accounts?: boolean
   readonly has_overlay?: boolean
   readonly rule_id?: string
   readonly batch_id?: string
@@ -392,6 +397,14 @@ const buildFilterWhere = (
 
   const includeExcluded = f.include_excluded ?? defaults.includeExcluded
   if (!includeExcluded) conds.push(`${alias}.is_excluded = 0`)
+
+  const includeInactiveAccounts =
+    f.include_inactive_accounts ?? Boolean(f.account_ids && f.account_ids.length > 0)
+  if (!includeInactiveAccounts) {
+    conds.push(
+      `(${alias}.account_id IS NULL OR COALESCE((SELECT ao.is_hidden FROM account_overlay ao WHERE ao.workspace_id = ${alias}.workspace_id AND ao.account_id = ${alias}.account_id AND ao.active = 1 AND ao.is_hidden IS NOT NULL ORDER BY ao.seq DESC, ao.id DESC LIMIT 1), 0) = 0)`,
+    )
+  }
 
   if (f.has_overlay !== undefined) {
     conds.push(`${alias}.has_overlay = ?`)
