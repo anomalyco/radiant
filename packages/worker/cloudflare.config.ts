@@ -21,6 +21,8 @@ export default defineConfig(({ mode }) => {
       compatibilityFlags: ["nodejs_compat"],
       workersDev: false,
       previewUrls: false,
+      // The Worker routes every request and serves the web app's files itself, under BASE_PATH (src/shell.ts).
+      assets: { runWorkerFirst: true },
       triggers: [
         triggers.fetch({ pattern: `${host}${BASE_PATH}`, zone: host }),
         triggers.fetch({ pattern: `${host}${BASE_PATH}/*`, zone: host }),
@@ -44,6 +46,7 @@ export default defineConfig(({ mode }) => {
         PLAID_ENV: bindings.text(dev ? "sandbox" : "production"),
         ENCRYPTION_KEY_VERSION: bindings.text("v1"),
         PLAID_SYNC_QUEUE: bindings.queue({ name: queueName }),
+        ASSETS: bindings.assets(),
         DATABASE_URL: bindings.secret(),
         DATABASE_READ_URL: bindings.secret(),
         ENCRYPTION_KEY: bindings.secret(),

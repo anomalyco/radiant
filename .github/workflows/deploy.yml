@@ -32,6 +32,8 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
       - run: bun run test
+      - name: Build web app
+        run: bun run --cwd packages/web build
       - name: Build Worker bundle
         working-directory: packages/worker
         run: |

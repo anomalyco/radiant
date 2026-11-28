@@ -39,7 +39,7 @@ export default {
       if (route.path === "/mcp") {
         return yield* handleMcpRequest(request, route)
       }
-      const oauthRes = yield* handleOAuthRoutes(request, route)
+      const oauthRes = yield* handleOAuthRoutes(request, route, env)
       if (oauthRes) return oauthRes
       return yield* handleAppRoutes(request, route, env)
     })
