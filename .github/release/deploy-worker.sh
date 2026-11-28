@@ -22,7 +22,8 @@ export CLOUDFLARE_ACCOUNT_ID
 unexpected=$(cd "$src" && find . ! -type d ! -type f -o -type f ! -path ./SHA256SUMS \
   ! -path ./v0/config.json \
   ! -path ./v0/workers/default/worker.config.json \
-  ! -path './v0/workers/default/bundle/*')
+  ! -path './v0/workers/default/bundle/*' \
+  ! -path './v0/workers/default/assets/*')
 [ -z "$unexpected" ] || die "Unexpected files in the worker artifact: $unexpected"
 [ -f "$src/v0/workers/default/bundle/index.js" ] || die "The worker artifact has no bundle/index.js"
 
@@ -63,6 +64,9 @@ mkdir -p "$output/workers/default"
 cp "$target/root.json" "$output/config.json"
 cp "$target/worker.json" "$output/workers/default/worker.config.json"
 cp -R "$src/v0/workers/default/bundle" "$output/workers/default/bundle"
+# The web app's build (packages/web), served through the ASSETS binding.
+[ -f "$src/v0/workers/default/assets/index.html" ] || die "The worker artifact has no web app assets"
+cp -R "$src/v0/workers/default/assets" "$output/workers/default/assets"
 
 cf="$release/cf/node_modules/.bin/cf"
 [ -x "$cf" ] || die "Install the pinned cf CLI first: npm ci --ignore-scripts in .github/release/cf"
