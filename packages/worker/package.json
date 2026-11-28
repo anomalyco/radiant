@@ -4,16 +4,17 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "bunx cf dev --mode dev",
+    "dev": "bun run --cwd ../web build && bunx cf dev --mode dev",
     "typecheck": "tsc --noEmit",
-    "build:check": "bunx cf deploy --dry-run --mode dev",
-    "deploy:dev": "bunx cf deploy --mode dev",
-    "deploy:production": "bunx cf deploy --mode production"
+    "build:check": "bun run --cwd ../web build && bunx cf deploy --dry-run --mode dev",
+    "deploy:dev": "bun run --cwd ../web build && bunx cf deploy --mode dev",
+    "deploy:production": "bun run --cwd ../web build && bunx cf deploy --mode production"
   },
   "dependencies": {
     "@radiant/core": "workspace:*",
     "@radiant/database": "workspace:*",
-    "effect": "4.1.2"
+    "effect": "4.1.2",
+    "@radiant/web": "workspace:*"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "2.0.0-beta.v.4",

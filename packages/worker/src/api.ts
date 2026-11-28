@@ -60,14 +60,11 @@ import {
 } from "@radiant/core"
 import type { TxPatch, WorkspaceRole } from "@radiant/database/schema"
 import { markdownResponse, prefersMarkdown, renderAgentMarkdown } from "./agent-doc"
-import { htmlResponse, jsonResponse, type AppServices, type Env, type RouteContext } from "./env"
+import { jsonResponse, type AppServices, type Env, type RouteContext } from "./env"
 import { resolveBrowserActor } from "./oauth-routes"
-import {
-  renderConnectHandoffPage,
-  renderEmptyWorkspacesPage,
-  renderLandingPage,
-  renderWorkspaceDashboard,
-} from "./ui"
+import { isStaticAsset, serveShell, serveStatic } from "./shell"
+
+const bootUser = (actor: Actor) => ({ email: actor.email, name: actor.name })
 
 const resolveApiActor = (
   request: Request,
@@ -95,7 +92,7 @@ export const handleAppRoutes = (
   env: Env,
 ): Effect.Effect<Response, unknown, AppServices> =>
   Effect.gen(function* () {
-    const { url, path, basePath, baseUrl } = route
+    const { url, path, baseUrl } = route
     const method = request.method
 
     // Health check (does not touch DB)
@@ -124,7 +121,11 @@ export const handleAppRoutes = (
       return jsonResponse({ received: true, action: job.action })
     }
 
-    // ── Agent-First Markdown & Minimal SSR Web UI Routes ────────────────────
+    // ── Agent-First Markdown & the Web App (packages/web) ───────────────────
+
+    if (method === "GET" && isStaticAsset(path)) {
+      return yield* Effect.promise(() => serveStatic(env, route))
+    }
 
     if (method === "GET" && (path === "/index.md" || path === "/llms.txt")) {
       return markdownResponse(renderAgentMarkdown(baseUrl))
@@ -135,55 +136,25 @@ export const handleAppRoutes = (
         return markdownResponse(renderAgentMarkdown(baseUrl))
       }
       const actor = yield* resolveBrowserActor(request)
-      if (!actor) return htmlResponse(renderLandingPage(baseUrl, basePath), 200, { vary: "Accept" })
+      if (!actor) return yield* Effect.promise(() => serveShell(env, route, { page: "landing" }, { headers: { vary: "Accept" } }))
       const workspaces = yield* listWorkspaces(actor)
-      if (workspaces.length === 0) return htmlResponse(renderEmptyWorkspacesPage(actor.email, basePath), 200, { vary: "Accept" })
+      if (workspaces.length === 0) {
+        return yield* Effect.promise(() =>
+          serveShell(env, route, { page: "app", user: bootUser(actor), workspaces, flash: null }, { headers: { vary: "Accept" } }),
+        )
+      }
       return Response.redirect(`${baseUrl}/w/${workspaces[0]!.slug}`, 302)
     }
 
-    if (method === "POST" && path === "/ui/workspaces") {
-      const actor = yield* resolveBrowserActor(request)
-      if (!actor) return Response.redirect(`${baseUrl}/auth/login`, 302)
-      const form = yield* Effect.promise(async () => new URLSearchParams(await request.text()))
-      const created = yield* createWorkspace(actor, {
-        name: form.get("name") ?? "Personal",
-        currency: form.get("currency") ?? "USD",
-      })
-      return Response.redirect(`${baseUrl}/w/${created.slug}`, 302)
-    }
-
+    // The app's own pages: the page routes in place from here (packages/web/src/route.ts).
     if (method === "GET" && path.startsWith("/w/")) {
-      const slug = decodeURIComponent(path.slice(3).split("/")[0] ?? "")
       const actor = yield* resolveBrowserActor(request)
       if (!actor) {
         return Response.redirect(`${baseUrl}/auth/login?return_to=${encodeURIComponent(url.pathname)}`, 302)
       }
       const workspaces = yield* listWorkspaces(actor)
-      const ws = yield* assertWorkspaceAccess(actor, slug, "viewer")
-      const [items, accounts, members, batches] = yield* Effect.all([
-        listPlaidItems(actor, ws.id),
-        listAccounts(actor, ws.id, { include_inactive: true }),
-        listMembers(actor, ws.id),
-        listOverlayBatches(actor, ws.id, { limit: 25 }),
-      ])
-      const invites =
-        ws.role === "owner" || ws.role === "admin"
-          ? yield* listInvites(actor, ws.id)
-          : []
-      return htmlResponse(
-        renderWorkspaceDashboard({
-          baseUrl,
-          basePath,
-          email: actor.email,
-          workspace: ws,
-          workspaces,
-          items,
-          accounts,
-          members,
-          invites,
-          batches,
-          flash: url.searchParams.get("flash"),
-        }),
+      return yield* Effect.promise(() =>
+        serveShell(env, route, { page: "app", user: bootUser(actor), workspaces, flash: url.searchParams.get("flash") }),
       )
     }
 
@@ -196,12 +167,11 @@ export const handleAppRoutes = (
       }
       const handoff = yield* resolveConnectHandoffToken(rawToken)
       const ws = yield* assertWorkspaceAccess(actor, handoff.workspace_id, "admin")
-      return htmlResponse(
-        renderConnectHandoffPage({
-          basePath,
-          workspaceId: ws.id,
-          workspaceName: ws.name,
-          workspaceSlug: ws.slug,
+      return yield* Effect.promise(() =>
+        serveShell(env, route, {
+          page: "connect",
+          user: bootUser(actor),
+          workspace: { id: ws.id, slug: ws.slug, name: ws.name, currency: ws.currency, role: ws.role },
           connectToken: rawToken,
           mode: handoff.mode,
           itemId: handoff.item_id,

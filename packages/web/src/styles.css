@@ -1,0 +1,570 @@
+/* The shell, tables and cards follow anomalyco/release's admin page (admin/ui/styles.css), on @opencode/ui's tokens. */
+@import "@opencode/ui/styles/tokens/colors.css";
+@import "@opencode/ui/styles/tokens/theme.css";
+
+@font-face {
+  font-family: InterVariable;
+  src: url("./fonts/InterVariable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  scrollbar-gutter: stable;
+  font-family:
+    InterVariable,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11", "ss01";
+  color: var(--text);
+  background: var(--v2-background-bg-deep);
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --accent: var(--v2-text-text-base);
+  --brand: var(--v2-text-text-accent);
+  --border: var(--v2-border-border-muted);
+  --muted: var(--v2-text-text-muted);
+  --faint: var(--v2-text-text-faint);
+  --positive: var(--v2-state-fg-success);
+  --negative: var(--v2-state-fg-danger);
+  --warning: var(--v2-state-fg-warning);
+  --surface: var(--v2-background-bg-base);
+  --raised: var(--v2-background-bg-layer-01);
+  --layer: var(--v2-background-bg-layer-02);
+  --text: var(--v2-text-text-base);
+}
+:root[data-color-scheme="dark"] {
+  --v2-text-text-accent: #6b8fff;
+  --v2-icon-icon-accent: #6b8fff;
+  --v2-border-border-focus: #6b8fff;
+}
+
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  min-width: 320px;
+  font-size: 13px;
+  font-weight: 440;
+  line-height: 1.5;
+  letter-spacing: -0.04px;
+  font-variant-numeric: tabular-nums;
+}
+button,
+select,
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+button,
+select,
+summary {
+  cursor: pointer;
+}
+a {
+  color: inherit;
+}
+:is(button, a, input, select, summary, textarea):focus-visible {
+  outline: 2px solid var(--v2-border-border-focus);
+  outline-offset: 2px;
+}
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+h1,
+h2,
+h3 {
+  font-weight: 530;
+  text-wrap: balance;
+}
+p {
+  text-wrap: pretty;
+}
+strong,
+b {
+  font-weight: 530;
+}
+code,
+pre {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ── Frame: a deep background, a header strip, and one raised panel ─────────────────────────────────────────── */
+.app-frame {
+  display: flex;
+  min-height: 100dvh;
+  flex-direction: column;
+  padding: 0 8px 8px;
+  background: var(--v2-background-bg-deep);
+}
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  min-height: 44px;
+  padding: 0 12px;
+}
+.app-header-start,
+.app-header-end {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.app-panel {
+  flex: 1;
+  min-width: 0;
+  border-radius: 6px;
+  background: var(--surface);
+  box-shadow: var(--v2-elevation-raised);
+}
+.shell {
+  width: min(calc(100% - 64px), 1200px);
+  margin: 0 auto;
+  padding: 40px 0 32px;
+}
+.shell.narrow {
+  width: min(calc(100% - 64px), 560px);
+  padding-top: 72px;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 530;
+  text-decoration: none;
+}
+.brand-mark {
+  display: flex;
+  align-items: end;
+  gap: 2px;
+  height: 16px;
+}
+.brand-mark i {
+  width: 3px;
+  height: 6px;
+  background: var(--v2-icon-icon-base);
+  transform-origin: bottom;
+}
+.brand-mark i:nth-child(2) {
+  height: 11px;
+}
+.brand-mark i:nth-child(3) {
+  height: 16px;
+}
+.brand-mark[data-loading] i {
+  animation: brand-breathe 1.6s cubic-bezier(0.37, 0, 0.63, 1) infinite;
+}
+.brand-mark[data-loading] i:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.brand-mark[data-loading] i:nth-child(3) {
+  animation-delay: 0.4s;
+}
+@keyframes brand-breathe {
+  50% {
+    transform: scaleY(0.55);
+    opacity: 0.45;
+  }
+}
+.header-slash {
+  color: var(--faint);
+}
+.role-select {
+  width: 140px;
+}
+.workspace-select {
+  width: auto;
+  max-width: 220px;
+}
+.header-email {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* ── Tabs under the header ─────────────────────────────────────────────────────────────────────────────────────── */
+.nav-tabs {
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+  padding: 0 max(12px, calc((100% - 1200px) / 2));
+}
+.nav-tabs a {
+  position: relative;
+  padding: 12px 10px 11px;
+  color: var(--muted);
+  text-decoration: none;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.nav-tabs a:hover {
+  color: var(--text);
+}
+.nav-tabs a[aria-current="page"] {
+  color: var(--text);
+}
+.nav-tabs a[aria-current="page"]::after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: -1px;
+  height: 1px;
+  background: var(--text);
+}
+
+/* ── Headings ──────────────────────────────────────────────────────────────────────────────────────────────────── */
+.page-title {
+  font-size: 20px;
+  letter-spacing: -0.2px;
+}
+.page-lede {
+  margin-top: 6px;
+  color: var(--muted);
+  max-width: 60ch;
+}
+.section {
+  margin-top: 40px;
+}
+.section:first-child {
+  margin-top: 0;
+}
+.section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 28px;
+  margin-bottom: 12px;
+}
+.section-heading h2 {
+  font-size: 15px;
+  line-height: 20px;
+  letter-spacing: -0.13px;
+}
+.heading-inline,
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.section-hint {
+  color: var(--muted);
+  font-size: 11px;
+}
+.eyebrow {
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+  margin-bottom: 12px;
+}
+
+/* ── Tables ────────────────────────────────────────────────────────────────────────────────────────────────────── */
+.table-scroll {
+  overflow-x: auto;
+  overflow-y: clip;
+  padding: 2px;
+  border-radius: 6px;
+  background: var(--raised);
+  box-shadow: inset 0 0 0 0.5px var(--border);
+}
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+}
+.data-table th {
+  color: var(--muted);
+  white-space: nowrap;
+  height: 32px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.data-table :is(th, td) {
+  text-align: left;
+}
+.data-table :is(th, td).num,
+.data-table :is(th, td).end {
+  text-align: right;
+}
+.data-table td {
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  padding: 10px;
+  vertical-align: middle;
+}
+.data-table :is(th, td):first-child {
+  padding-left: 12px;
+}
+.data-table :is(th, td):last-child {
+  padding-right: 12px;
+}
+.data-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.data-table tbody tr[data-clickable] {
+  cursor: pointer;
+}
+.data-table tbody tr[data-clickable]:hover td {
+  background: var(--v2-overlay-simple-overlay-hover);
+}
+.data-table tbody tr[data-dim] td {
+  color: var(--faint);
+}
+.data-table td.nowrap,
+.data-table td.num {
+  white-space: nowrap;
+}
+.cell-title {
+  display: grid;
+  min-width: 0;
+}
+.cell-title > strong,
+.cell-title > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cell-title > span {
+  color: var(--faint);
+  font-size: 12px;
+}
+.cell-with-avatar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.table-empty {
+  padding: 28px 12px;
+  text-align: center;
+  color: var(--muted);
+  background: var(--surface);
+}
+.rank {
+  color: var(--faint);
+  font-size: 12px;
+}
+.mask {
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.tags {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+/* ── Cards, notes and forms ────────────────────────────────────────────────────────────────────────────────────── */
+.card {
+  border-radius: 6px;
+  background: var(--raised);
+  box-shadow: inset 0 0 0 0.5px var(--border);
+  padding: 20px;
+}
+.card + .card {
+  margin-top: 16px;
+}
+.card h2 {
+  font-size: 15px;
+}
+.card p {
+  color: var(--muted);
+}
+.card > * + * {
+  margin-top: 12px;
+}
+.muted {
+  color: var(--muted);
+}
+.faint {
+  color: var(--faint);
+}
+.warning {
+  color: var(--warning);
+}
+.form-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px;
+}
+.form-row > .grow {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+/* A text input fills the space its form gives it, rather than the component's 280px default. */
+:is(.grow, .field-label, form.card) > [data-component="text-input-v2"] {
+  width: 100%;
+}
+.code-block {
+  position: relative;
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 6px;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 0.5px var(--border);
+  overflow-x: auto;
+  white-space: pre;
+  line-height: 1.6;
+}
+.secret {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 0.5px var(--border);
+  font-family: var(--mono);
+  font-size: 12px;
+  word-break: break-all;
+}
+.secret code {
+  flex: 1;
+}
+.status-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--positive);
+  vertical-align: 1px;
+}
+.status-dot[data-tone="warn"] {
+  background: var(--warning);
+}
+.status-dot[data-tone="off"] {
+  background: var(--faint);
+}
+.stack {
+  display: grid;
+  gap: 12px;
+}
+.detail-list {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 8px 20px;
+  margin: 0;
+}
+.detail-list dt {
+  color: var(--muted);
+}
+.detail-list dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.rule-match {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  white-space: normal;
+}
+
+/* ── Auth-style centred pages ──────────────────────────────────────────────────────────────────────────────────── */
+.hero {
+  display: grid;
+  gap: 16px;
+}
+.hero h1 {
+  font-size: clamp(1.8rem, 3vw, 2.25rem);
+  letter-spacing: -0.045em;
+  line-height: 1.15;
+}
+.hero p {
+  color: var(--muted);
+  font-size: 15px;
+}
+.feature-list {
+  display: grid;
+  gap: 0;
+  margin: 32px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.feature-list li {
+  display: flex;
+  gap: 12px;
+  padding: 14px 0;
+  border-top: 1px solid var(--border);
+}
+.feature-list li strong {
+  min-width: 120px;
+}
+.feature-list li span {
+  color: var(--muted);
+}
+
+.fade-in {
+  animation: fade-in 220ms ease-out;
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    translate: 0 4px;
+  }
+}
+
+
+@media (max-width: 720px) {
+  .app-frame {
+    padding: 0 4px 4px;
+  }
+  .app-header {
+    padding: 0 8px;
+  }
+  .shell,
+  .shell.narrow {
+    width: calc(100% - 32px);
+    padding: 28px 0;
+  }
+  .header-email {
+    display: none;
+  }
+  .data-table td,
+  .data-table th {
+    padding-inline: 6px;
+  }
+  .hide-narrow {
+    display: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

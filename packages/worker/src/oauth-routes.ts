@@ -17,8 +17,8 @@ import {
   verifyBrowserSession,
   type Actor,
 } from "@radiant/core"
-import { formatSetCookie, getCookie, htmlResponse, jsonResponse, type AppServices, type RouteContext } from "./env"
-import { renderDeviceApprovePage, renderOAuthConsentPage } from "./ui"
+import { formatSetCookie, getCookie, jsonResponse, type AppServices, type Env, type RouteContext } from "./env"
+import { serveShell } from "./shell"
 
 export const SESSION_COOKIE = "radiant_session"
 export const FLOW_COOKIE = "radiant_oidc_flow"
@@ -50,6 +50,7 @@ export const resolveBrowserActor = (
 export const handleOAuthRoutes = (
   request: Request,
   route: RouteContext,
+  env: Env,
 ): Effect.Effect<Response | null, unknown, AppServices> =>
   Effect.gen(function* () {
     const { url, baseUrl, basePath, path } = route
@@ -146,10 +147,13 @@ export const handleOAuthRoutes = (
       const iss = url.searchParams.get("iss")
       const err = url.searchParams.get("error")
       if (err) {
-        return htmlResponse(`<h1>Sign-in error</h1><p>${err}</p>`, 400)
+        const message = url.searchParams.get("error_description") ?? err
+        return yield* Effect.promise(() => serveShell(env, route, { page: "notice", title: "Sign-in failed", message }, { status: 400 }))
       }
       if (!code || !state) {
-        return htmlResponse("<h1>Missing code or state</h1>", 400)
+        return yield* Effect.promise(() =>
+          serveShell(env, route, { page: "notice", title: "Sign-in failed", message: "The sign-in response was missing its code or state. Try again." }, { status: 400 }),
+        )
       }
       const browserToken = getCookie(request, FLOW_COOKIE)
       const { flow, user } = yield* completeUpstreamOidcCallback({
@@ -203,13 +207,13 @@ export const handleOAuthRoutes = (
         })
       }
 
-      return htmlResponse(
-        renderOAuthConsentPage({
-          basePath,
+      return yield* Effect.promise(() =>
+        serveShell(env, route, {
+          page: "consent",
+          user: { email: actor.email, name: actor.name },
           clientName: client.name,
           redirectUri,
-          email: actor.email,
-          hiddenFields: {
+          fields: {
             client_id: clientId,
             redirect_uri: redirectUri,
             code_challenge: codeChallenge,
@@ -314,12 +318,13 @@ export const handleOAuthRoutes = (
       }
       const code = url.searchParams.get("code") ?? ""
       const pending = code ? yield* lookupDeviceFlow(code) : null
-      return htmlResponse(
-        renderDeviceApprovePage({
-          basePath,
-          email: actor.email,
+      return yield* Effect.promise(() =>
+        serveShell(env, route, {
+          page: "device",
+          user: { email: actor.email, name: actor.name },
           code,
           clientName: pending?.client_name ?? null,
+          result: null,
         }),
       )
     }
@@ -329,12 +334,13 @@ export const handleOAuthRoutes = (
       if (!actor) return jsonResponse({ error: "unauthorized" }, 401)
       const form = yield* Effect.tryPromise(() => readFormOrJson(request))
       const decided = yield* decideDeviceFlow(form.code ?? "", actor.userId, form.decision === "approve")
-      return htmlResponse(
-        renderDeviceApprovePage({
-          basePath,
-          email: actor.email,
+      return yield* Effect.promise(() =>
+        serveShell(env, route, {
+          page: "device",
+          user: { email: actor.email, name: actor.name },
           code: decided.user_code,
-          message: decided.status === "approved" ? "Approved. You can return to your agent." : "Denied.",
+          clientName: null,
+          result: decided.status === "approved" ? "approved" : "denied",
         }),
       )
     }

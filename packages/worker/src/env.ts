@@ -89,6 +89,8 @@ export interface Env {
   readonly PLAID_CLIENT_ID?: string
   readonly PLAID_SECRET?: string
   readonly PLAID_SYNC_QUEUE?: Queue<SyncQueueMessage>
+  /** The built web app (packages/web/dist). */
+  readonly ASSETS?: Fetcher
 }
 
 export type AppServices = Database | AuthConfig | CryptoConfig | PlaidClient
@@ -170,23 +172,6 @@ export const jsonResponse = (
     headers: {
       "content-type": "application/json; charset=utf-8",
       "cache-control": "no-store",
-      ...extraHeaders,
-    },
-  })
-
-export const htmlResponse = (
-  html: string,
-  status = 200,
-  extraHeaders?: Record<string, string>,
-): Response =>
-  new Response(html, {
-    status,
-    headers: {
-      "content-type": "text/html; charset=utf-8",
-      "cache-control": "no-store",
-      "x-frame-options": "DENY",
-      "content-security-policy":
-        "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.plaid.com; style-src 'self' 'unsafe-inline'; frame-src https://cdn.plaid.com https://*.plaid.com; connect-src 'self' https://*.plaid.com; frame-ancestors 'none'",
       ...extraHeaders,
     },
   })

@@ -75,7 +75,7 @@ describe("Agent-driven onboarding flow & Markdown content negotiation", () => {
         Effect.provide(
           Effect.gen(function* () {
             const route = buildRouteContext(new URL(req.url), "/labs/radiant")
-            const oauthRes = yield* handleOAuthRoutes(req, route)
+            const oauthRes = yield* handleOAuthRoutes(req, route, MOCK_ENV)
             if (oauthRes) return oauthRes
             return yield* handleAppRoutes(req, route, MOCK_ENV)
           }),
