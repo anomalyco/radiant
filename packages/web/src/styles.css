@@ -43,9 +43,49 @@
   --v2-border-border-focus: #6b8fff;
 }
 
-* {
-  box-sizing: border-box;
+/* @opencode/ui's components sit in `@layer components` and assume Tailwind's preflight, which OpenCode Console loads.
+   This is that reset, in `@layer base` like preflight, so the components' styles win over it and over the browser's. */
+@layer base {
+  *,
+  ::before,
+  ::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    border: 0 solid;
+  }
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+    color: inherit;
+    background-color: transparent;
+    border-radius: 0;
+  }
+  button,
+  select,
+  summary {
+    cursor: pointer;
+  }
+  a {
+    color: inherit;
+  }
+  img,
+  svg {
+    display: block;
+    vertical-align: middle;
+  }
+  ul,
+  ol {
+    list-style: none;
+  }
+  :is(a, summary):focus-visible {
+    outline: 2px solid var(--v2-border-border-focus);
+    outline-offset: 2px;
+  }
 }
+
 body {
   margin: 0;
   min-width: 320px;
@@ -54,25 +94,6 @@ body {
   line-height: 1.5;
   letter-spacing: -0.04px;
   font-variant-numeric: tabular-nums;
-}
-button,
-select,
-input,
-textarea {
-  font: inherit;
-  color: inherit;
-}
-button,
-select,
-summary {
-  cursor: pointer;
-}
-a {
-  color: inherit;
-}
-:is(button, a, input, select, summary, textarea):focus-visible {
-  outline: 2px solid var(--v2-border-border-focus);
-  outline-offset: 2px;
 }
 h1,
 h2,
